@@ -1,17 +1,111 @@
 ; Shellslatee NSIS installer hooks.
 ;
-; Setup asks where notes should live (default: %USERPROFILE%\Shellslatee Notes)
-; and creates it. Documents is avoided by default because Windows Defender
-; Controlled Folder Access blocks writes there for unsigned apps. The choice is
-; written to notes_dir.txt so the app picks it up on first run.
+; The first wizard page asks where the notes folder should live. The folder is
+; always named "Shellslatee Notes"; the user picks the parent (default: the user
+; profile, because Windows Defender Controlled Folder Access blocks unsigned
+; apps writing to Documents). The choice is stored in notes_dir.txt so the app
+; picks it up on first run.
+
+!include "nsDialogs.nsh"
+
+Var ShellslateeNotesPath
+Var ShellslateeNotesField
+
+Page custom ShellslateeNotesPage ShellslateeNotesLeave
+
+Function ShellslateeNotesPage
+  ${If} ${Silent}
+    Abort
+  ${EndIf}
+
+  !insertmacro MUI_HEADER_TEXT "Notes folder" "Choose where Shellslatee keeps your lecture notes."
+
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 26u "Shellslatee saves Markdown notes in a folder named 'Shellslatee Notes'. Keep the suggested location or choose another parent folder."
+  Pop $0
+
+  ${NSD_CreateText} 0 30u -1 13u "$PROFILE\Shellslatee Notes"
+  Pop $ShellslateeNotesField
+  ${NSD_SetFocus} $ShellslateeNotesField
+  SendMessage $ShellslateeNotesField ${EM_SETSEL} 0 -1
+
+  ; Keep the folder from a previous install instead of resetting it.
+  IfFileExists "$PROFILE\.config\shellslatee\notes_dir.txt" 0 shellslatee_nofile
+    FileOpen $1 "$PROFILE\.config\shellslatee\notes_dir.txt" r
+    FileRead $1 $2
+    FileClose $1
+    ${If} $2 != ""
+      ${NSD_SetText} $ShellslateeNotesField $2
+    ${EndIf}
+  shellslatee_nofile:
+
+  ${NSD_CreateButton} 0 48u 70u 14u "Browse folder..."
+  Pop $0
+  ${NSD_OnClick} $0 ShellslateeNotesBrowse
+
+  ${NSD_CreateLabel} 0 68u 100% 24u "The folder is created during setup and is kept when you uninstall."
+  Pop $0
+
+  nsDialogs::Show
+FunctionEnd
+
+Function ShellslateeNotesBrowse
+  ${NSD_GetText} $ShellslateeNotesField $0
+  nsDialogs::SelectFolderDialog "Choose where the 'Shellslatee Notes' folder should live" "$0"
+  Pop $1
+  ${If} $1 != ""
+  ${AndIf} $1 != "error"
+    StrCpy $2 $1 "" -16
+    ${If} $2 == "Shellslatee Notes"
+      ${NSD_SetText} $ShellslateeNotesField "$1"
+    ${Else}
+      ${NSD_SetText} $ShellslateeNotesField "$1\Shellslatee Notes"
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+
+Function ShellslateeNotesLeave
+  ${NSD_GetText} $ShellslateeNotesField $ShellslateeNotesPath
+  ${If} $ShellslateeNotesPath == ""
+    StrCpy $ShellslateeNotesPath "$PROFILE\Shellslatee Notes"
+  ${EndIf}
+FunctionEnd
 
 !macro NSIS_HOOK_POSTINSTALL
-  IfSilent shellslatee_notes_silent
-  nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -EncodedCommand QQBkAGQALQBUAHkAcABlACAALQBBAHMAcwBlAG0AYgBsAHkATgBhAG0AZQAgAFMAeQBzAHQAZQBtAC4AVwBpAG4AZABvAHcAcwAuAEYAbwByAG0AcwAgAHwAIABPAHUAdAAtAE4AdQBsAGwACgAkAGQAZQBmAGEAdQBsAHQAIAA9ACAASgBvAGkAbgAtAFAAYQB0AGgAIAAkAGUAbgB2ADoAVQBTAEUAUgBQAFIATwBGAEkATABFACAAJwBTAGgAZQBsAGwAcwBsAGEAdABlAGUAIABOAG8AdABlAHMAJwAKACQAcABhAHQAaAAgAD0AIAAkAGQAZQBmAGEAdQBsAHQACgAkAGQAbABnACAAPQAgAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABTAHkAcwB0AGUAbQAuAFcAaQBuAGQAbwB3AHMALgBGAG8AcgBtAHMALgBGAG8AbABkAGUAcgBCAHIAbwB3AHMAZQByAEQAaQBhAGwAbwBnAAoAJABkAGwAZwAuAEQAZQBzAGMAcgBpAHAAdABpAG8AbgAgAD0AIAAnAEMAaABvAG8AcwBlACAAdwBoAGUAcgBlACAAUwBoAGUAbABsAHMAbABhAHQAZQBlACAAcwBhAHYAZQBzACAAeQBvAHUAcgAgAGwAZQBjAHQAdQByAGUAIABuAG8AdABlAHMAJwAKACQAZABsAGcALgBTAGUAbABlAGMAdABlAGQAUABhAHQAaAAgAD0AIAAkAGQAZQBmAGEAdQBsAHQACgAkAGQAbABnAC4AUwBoAG8AdwBOAGUAdwBGAG8AbABkAGUAcgBCAHUAdAB0AG8AbgAgAD0AIAAkAHQAcgB1AGUACgBpAGYAIAAoACQAZABsAGcALgBTAGgAbwB3AEQAaQBhAGwAbwBnACgAKQAgAC0AZQBxACAAWwBTAHkAcwB0AGUAbQAuAFcAaQBuAGQAbwB3AHMALgBGAG8AcgBtAHMALgBEAGkAYQBsAG8AZwBSAGUAcwB1AGwAdABdADoAOgBPAEsAKQAgAHsAIAAkAHAAYQB0AGgAIAA9ACAAJABkAGwAZwAuAFMAZQBsAGUAYwB0AGUAZABQAGEAdABoACAAfQAKAGYAdQBuAGMAdABpAG8AbgAgAFQAZQBzAHQALQBXAHIAaQB0AGEAYgBsAGUAKABbAHMAdAByAGkAbgBnAF0AJABwACkAIAB7AAoAIAAgAHQAcgB5ACAAewAKACAAIAAgACAAWwB2AG8AaQBkAF0AWwBJAE8ALgBEAGkAcgBlAGMAdABvAHIAeQBdADoAOgBDAHIAZQBhAHQAZQBEAGkAcgBlAGMAdABvAHIAeQAoACQAcAApAAoAIAAgACAAIAAkAHAAcgBvAGIAZQAgAD0AIABKAG8AaQBuAC0AUABhAHQAaAAgACQAcAAgACgAJwAuAHMAcwAtACcAIAArACAAWwBnAHUAaQBkAF0AOgA6AE4AZQB3AEcAdQBpAGQAKAApAC4AVABvAFMAdAByAGkAbgBnACgAJwBOACcAKQApAAoAIAAgACAAIABbAEkATwAuAEYAaQBsAGUAXQA6ADoAVwByAGkAdABlAEEAbABsAFQAZQB4AHQAKAAkAHAAcgBvAGIAZQAsACAAJwB4ACcAKQAKACAAIAAgACAAUgBlAG0AbwB2AGUALQBJAHQAZQBtACAALQBMAGkAdABlAHIAYQBsAFAAYQB0AGgAIAAkAHAAcgBvAGIAZQAgAC0ARgBvAHIAYwBlAAoAIAAgACAAIAByAGUAdAB1AHIAbgAgACQAdAByAHUAZQAKACAAIAB9ACAAYwBhAHQAYwBoACAAewAgAHIAZQB0AHUAcgBuACAAJABmAGEAbABzAGUAIAB9AAoAfQAKAGkAZgAgACgALQBuAG8AdAAgACgAVABlAHMAdAAtAFcAcgBpAHQAYQBiAGwAZQAgACQAcABhAHQAaAApACkAIAB7AAoAIAAgACQAcABhAHQAaAAgAD0AIAAkAGQAZQBmAGEAdQBsAHQACgAgACAAaQBmACAAKAAtAG4AbwB0ACAAKABUAGUAcwB0AC0AVwByAGkAdABhAGIAbABlACAAJABwAGEAdABoACkAKQAgAHsAIABlAHgAaQB0ACAAMQAgAH0ACgB9AAoAJABkAGkAcgAgAD0AIABKAG8AaQBuAC0AUABhAHQAaAAgACQAZQBuAHYAOgBVAFMARQBSAFAAUgBPAEYASQBMAEUAIAAnAC4AYwBvAG4AZgBpAGcAXABzAGgAZQBsAGwAcwBsAGEAdABlAGUAJwAKAFsAdgBvAGkAZABdAFsASQBPAC4ARABpAHIAZQBjAHQAbwByAHkAXQA6ADoAQwByAGUAYQB0AGUARABpAHIAZQBjAHQAbwByAHkAKAAkAGQAaQByACkACgBTAGUAdAAtAEMAbwBuAHQAZQBuAHQAIAAtAEwAaQB0AGUAcgBhAGwAUABhAHQAaAAgACgASgBvAGkAbgAtAFAAYQB0AGgAIAAkAGQAaQByACAAJwBuAG8AdABlAHMAXwBkAGkAcgAuAHQAeAB0ACcAKQAgAC0AVgBhAGwAdQBlACAAJABwAGEAdABoACAALQBOAG8ATgBlAHcAbABpAG4AZQAgAC0ARQBuAGMAbwBkAGkAbgBnACAAQQBTAEMASQBJAAoA'
-  Goto shellslatee_notes_done
-  shellslatee_notes_silent:
-  nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand JABkAGUAZgBhAHUAbAB0ACAAPQAgAEoAbwBpAG4ALQBQAGEAdABoACAAJABlAG4AdgA6AFUAUwBFAFIAUABSAE8ARgBJAEwARQAgACcAUwBoAGUAbABsAHMAbABhAHQAZQBlACAATgBvAHQAZQBzACcACgBmAHUAbgBjAHQAaQBvAG4AIABUAGUAcwB0AC0AVwByAGkAdABhAGIAbABlACgAWwBzAHQAcgBpAG4AZwBdACQAcAApACAAewAKACAAIAB0AHIAeQAgAHsACgAgACAAIAAgAFsAdgBvAGkAZABdAFsASQBPAC4ARABpAHIAZQBjAHQAbwByAHkAXQA6ADoAQwByAGUAYQB0AGUARABpAHIAZQBjAHQAbwByAHkAKAAkAHAAKQAKACAAIAAgACAAJABwAHIAbwBiAGUAIAA9ACAASgBvAGkAbgAtAFAAYQB0AGgAIAAkAHAAIAAoACcALgBzAHMALQAnACAAKwAgAFsAZwB1AGkAZABdADoAOgBOAGUAdwBHAHUAaQBkACgAKQAuAFQAbwBTAHQAcgBpAG4AZwAoACcATgAnACkAKQAKACAAIAAgACAAWwBJAE8ALgBGAGkAbABlAF0AOgA6AFcAcgBpAHQAZQBBAGwAbABUAGUAeAB0ACgAJABwAHIAbwBiAGUALAAgACcAeAAnACkACgAgACAAIAAgAFIAZQBtAG8AdgBlAC0ASQB0AGUAbQAgAC0ATABpAHQAZQByAGEAbABQAGEAdABoACAAJABwAHIAbwBiAGUAIAAtAEYAbwByAGMAZQAKACAAIAAgACAAcgBlAHQAdQByAG4AIAAkAHQAcgB1AGUACgAgACAAfQAgAGMAYQB0AGMAaAAgAHsAIAByAGUAdAB1AHIAbgAgACQAZgBhAGwAcwBlACAAfQAKAH0ACgBpAGYAIAAoAC0AbgBvAHQAIAAoAFQAZQBzAHQALQBXAHIAaQB0AGEAYgBsAGUAIAAkAGQAZQBmAGEAdQBsAHQAKQApACAAewAgAGUAeABpAHQAIAAxACAAfQAKACQAZABpAHIAIAA9ACAASgBvAGkAbgAtAFAAYQB0AGgAIAAkAGUAbgB2ADoAVQBTAEUAUgBQAFIATwBGAEkATABFACAAJwAuAGMAbwBuAGYAaQBnAFwAcwBoAGUAbABsAHMAbABhAHQAZQBlACcACgBbAHYAbwBpAGQAXQBbAEkATwAuAEQAaQByAGUAYwB0AG8AcgB5AF0AOgA6AEMAcgBlAGEAdABlAEQAaQByAGUAYwB0AG8AcgB5ACgAJABkAGkAcgApAAoAUwBlAHQALQBDAG8AbgB0AGUAbgB0ACAALQBMAGkAdABlAHIAYQBsAFAAYQB0AGgAIAAoAEoAbwBpAG4ALQBQAGEAdABoACAAJABkAGkAcgAgACcAbgBvAHQAZQBzAF8AZABpAHIALgB0AHgAdAAnACkAIAAtAFYAYQBsAHUAZQAgACQAZABlAGYAYQB1AGwAdAAgAC0ATgBvAE4AZQB3AGwAaQBuAGUAIAAtAEUAbgBjAG8AZABpAG4AZwAgAEEAUwBDAEkASQAKAA=='
-  shellslatee_notes_done:
+  StrCpy $R0 $ShellslateeNotesPath
+  ${If} $R0 == ""
+    StrCpy $R0 "$PROFILE\Shellslatee Notes"
+  ${EndIf}
+
+  ; Create the folder and prove it accepts a write; a locked-down location
+  ; silently falls back to the profile rather than leaving setup broken.
+  ClearErrors
+  CreateDirectory "$R0"
+  FileOpen $8 "$R0\.shellslatee-write-test" w
+  ${If} ${Errors}
+    StrCpy $R0 "$PROFILE\Shellslatee Notes"
+    CreateDirectory "$R0"
+    ClearErrors
+    FileOpen $8 "$R0\.shellslatee-write-test" w
+  ${EndIf}
+  ${IfNot} ${Errors}
+    FileWrite $8 "ok"
+    FileClose $8
+    Delete "$R0\.shellslatee-write-test"
+  ${EndIf}
+
+  CreateDirectory "$PROFILE\.config\shellslatee"
+  FileOpen $9 "$PROFILE\.config\shellslatee\notes_dir.txt" w
+  FileWrite $9 "$R0"
+  FileClose $9
+  FileOpen $9 "$PROFILE\.config\shellslatee\install.log" a
+  FileWrite $9 "notes_dir=$R0$\r$\n"
+  FileClose $9
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
