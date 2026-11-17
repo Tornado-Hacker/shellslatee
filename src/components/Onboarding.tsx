@@ -421,7 +421,7 @@ export function Onboarding() {
                           }}
                           className="mt-1.5 text-[11px] text-accent underline-offset-2 hover:underline"
                         >
-                          Use the default location (Documents / Shellslatee Vault)
+                          Use the default location (Documents / Shellslatee Notes)
                         </button>
                       </div>
                       <div>

@@ -889,10 +889,23 @@ fn open_path(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+// The installer writes the notes folder it created to this file so the app and
+// the setup screen agree on one location instead of guessing.
+fn notes_marker_path() -> PathBuf {
+    config_home().join("notes_dir.txt")
+}
+
 fn default_vault() -> Result<String, String> {
     let home = dirs::home_dir().ok_or_else(|| "could not find the home directory".to_string())?;
-    let vault = dirs::document_dir().unwrap_or(home).join("Shellslatee Vault");
+    let marked = fs::read_to_string(notes_marker_path())
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let vault = marked.unwrap_or_else(|| dirs::document_dir().unwrap_or(home).join("Shellslatee Notes"));
     fs::create_dir_all(&vault).map_err(|error| format!("could not create {}: {error}", vault.display()))?;
+    // Remember it for next time, even when the folder came from the fallback.
+    let _ = write_atomic(&notes_marker_path(), &vault.to_string_lossy());
     Ok(vault.to_string_lossy().to_string())
 }
 

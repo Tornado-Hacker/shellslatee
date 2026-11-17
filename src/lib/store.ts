@@ -54,7 +54,20 @@ export const useStore = create<Store>((set, get) => ({
   ingestOpen: false,
 
   async init() {
-    const config = await bridge.loadConfig();
+    let config = await bridge.loadConfig();
+    // The installer creates the notes folder and leaves its path behind. Pick it
+    // up here so the vault is prefilled instead of blank on a fresh install.
+    if (isTauri && !config.vault) {
+      try {
+        const suggested = await bridge.defaultVault();
+        if (suggested) {
+          config = { ...config, vault: suggested };
+          await bridge.saveConfig(config);
+        }
+      } catch {
+        /* onboarding still lets the user pick a folder */
+      }
+    }
     applyAppearance(config);
     set({ config });
     const backend = await bridge.backendStatus();
