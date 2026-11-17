@@ -71,11 +71,18 @@ local config. No account, no sync server, no telemetry.
 Download the installer from
 [**Releases**](https://github.com/Tornado-Hacker/shellslatee/releases):
 
-- `Shellslatee_0.2.0_x64-setup.exe` — recommended (per-user, no admin needed)
-- `Shellslatee_0.2.0_x64_en-US.msi` — for managed / enterprise installs
+- `Shellslatee_0.2.4_x64-setup.exe` — recommended (per-user, no admin needed)
+- `Shellslatee_0.2.4_x64_en-US.msi` — for managed / enterprise installs
 
 Run it. SmartScreen will warn because the build is unsigned — choose
 **More info → Run anyway**.
+
+The setup wizard opens with a **Notes folder** page. Keep the suggested
+`%USERPROFILE%\Shellslatee Notes`, type another path, or use **Browse** to pick
+a parent — the folder name stays `Shellslatee Notes`. Setup creates it and
+checks that it is writable; if Windows Defender *Controlled folder access*
+blocks the location, it falls back to the profile so setup still completes.
+Uninstalling never deletes your notes.
 
 ### Step 2 — Let the app install the engine
 
@@ -112,8 +119,9 @@ Start **Shellslatee** from the Start menu. The window opens, the app spawns
 status. First launch walks you through:
 
 1. **Add a key** — pick a provider, paste the key, hit **Test**.
-2. **Pick a vault** — defaults to `Documents\Shellslatee Vault`. This is where
-   your Markdown notes will live.
+2. **Point at your course** — optionally pick the folder with your videos and
+   slides. The notes folder is already set by the installer; change it later
+   under **Settings → Vault**.
 3. **Drop a lecture** — an MP4, PPTX, or PDF. That's the fastest way to see the
    whole pipeline work.
 
@@ -124,7 +132,7 @@ status. First launch walks you through:
 | Step | Do this | You should see |
 | --- | --- | --- |
 | 1 | **Settings → Provider** → paste key → **Test** | `… accepted the key — test completion ran.` |
-| 2 | **Settings → Vault** → choose or create a folder | Vault path shown; engine restarts automatically |
+| 2 | **Settings → Vault** → keep the installer's folder or pick another | Vault path shown; engine restarts automatically |
 | 3 | **Library → Capture** → drop `lecture.mp4` or `slides.pdf` | A job appears, then a lesson with a transcript/outline |
 | 4 | Open the lesson → **Study** | Flashcards and quiz generated from the source |
 | 5 | **Home** → set exam date and daily minutes | Today's plan with due cards and weak concepts |
@@ -240,7 +248,9 @@ Environment variables read by the desktop shell:
 
 | What | Path |
 | --- | --- |
-| Notes / vault | `Documents\Shellslatee Vault\` (configurable in Settings) |
+| Notes / vault | `%USERPROFILE%\Shellslatee Notes\` — chosen in the setup wizard, changeable in **Settings → Vault** |
+| Notes-folder marker | `%USERPROFILE%\.config\shellslatee\notes_dir.txt` |
+| Installer log | `%USERPROFILE%\.config\shellslatee\install.log` |
 | Provider keys | `%USERPROFILE%\.config\shellslatee\desktop_keys.json` |
 | AI Key mirror | `%USERPROFILE%\.config\shellslatee\aikey_key` |
 | App config | `%USERPROFILE%\.config\shellslatee\desktop.json` |
@@ -289,6 +299,8 @@ the provider's environment variable set.
 | `cargo` not recognized | Rust not on `PATH` for this shell | Use `build-dev.bat`, or add `%USERPROFILE%\.cargo\bin` |
 | `link.exe not found` | MSVC environment not loaded | Run from *x64 Native Tools Command Prompt*, or use `build-dev.bat` |
 | SmartScreen blocks the installer | Build is unsigned | **More info → Run anyway**, or configure a signing certificate |
+| Notes folder was not created | Windows Defender *Controlled folder access* blocked `Documents` | The app falls back to `%USERPROFILE%\Shellslatee Notes`; check `install.log`, or allow Shellslatee under **Ransomware protection → Allow an app through Controlled folder access** |
+| Setup never asked for a folder | You ran the MSI or a silent `/S` install | Use `Shellslatee_0.2.4_x64-setup.exe`; silent installs use the profile default by design |
 | Port `1420` already in use | Another vite instance | Kill it, or set `VITE_PORT` and update `devUrl` in `tauri.conf.json` |
 | Scanned PDF produces no text | PDF is images, no text layer | OCR is on the roadmap for 0.4.0; meanwhile convert with an OCR tool first |
 
@@ -330,7 +342,7 @@ shellslatee/
 
 | Version | Focus |
 | --- | --- |
-| 0.2.0 | Current — desktop shell, engine lifecycle, key storage, study loop |
+| 0.2.4 | Current — setup wizard picks the notes folder; engine lifecycle, key storage, study loop |
 | 0.3.0 | Signed installers, multi-hour sessions with real models |
 | 0.4.0 | Scanned-PDF OCR, richer slide-note extraction |
 | 1.0.0 | Plugin marketplace, publishable adapter API |
