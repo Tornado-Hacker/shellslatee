@@ -29,7 +29,7 @@ function defaultConfig(): AppConfig {
     onboarded: false,
     vault: "",
     source: "",
-    provider: "tokenharbor",
+    provider: "aikey",
     model: "deepseek-v4.1-flash:free",
     theme: prefs as Theme,
     accent: "ember",

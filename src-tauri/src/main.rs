@@ -50,25 +50,29 @@ fn keys_path() -> PathBuf {
 
 fn env_name(provider: &str) -> Option<&'static str> {
     match provider {
-        "tokenharbor" => Some("TOKENHARBOR_API_KEY"),
+        "aikey" => Some("AIKEY_API_KEY"),
         "openrouter" => Some("OPENROUTER_API_KEY"),
         "openai" => Some("OPENAI_API_KEY"),
         _ => None,
     }
 }
 
-fn provider_base(provider: &str) -> Option<&'static str> {
+fn provider_base(provider: &str) -> Option<String> {
     match provider {
-        "tokenharbor" => Some("https://tokenharbor.ai/v1"),
-        "openrouter" => Some("https://openrouter.ai/api/v1"),
-        "openai" => Some("https://api.openai.com/v1"),
+        // The live service still answers on this host; AIKEY_BASE_URL overrides
+        // it for anyone pointing at a different deployment.
+        "aikey" => Some(
+            std::env::var("AIKEY_BASE_URL").unwrap_or_else(|_| "https://tokenharbor.ai/v1".to_string()),
+        ),
+        "openrouter" => Some("https://openrouter.ai/api/v1".to_string()),
+        "openai" => Some("https://api.openai.com/v1".to_string()),
         _ => None,
     }
 }
 
 fn provider_default_model(provider: &str) -> &'static str {
     match provider {
-        "tokenharbor" => "deepseek-v4.1-flash:free",
+        "aikey" => "deepseek-v4.1-flash:free",
         "openrouter" => "meta-llama/llama-3.3-70b-instruct:free",
         "openai" => "gpt-4o-mini",
         _ => "mock",
@@ -294,8 +298,8 @@ fn save_api_key(provider: String, key: String) -> Result<(), String> {
     keys.insert(provider.clone(), trimmed.to_string());
     write_keys(&keys)?;
     clear_keychain(&provider);
-    if provider == "tokenharbor" {
-        write_atomic(&config_home().join("tokenharbor_key"), trimmed)?;
+    if provider == "aikey" {
+        write_atomic(&config_home().join("aikey_key"), trimmed)?;
     }
     Ok(())
 }
@@ -306,8 +310,8 @@ fn clear_api_key(provider: String) -> Result<(), String> {
     keys.remove(&provider);
     write_keys(&keys)?;
     clear_keychain(&provider);
-    if provider == "tokenharbor" {
-        let _ = fs::remove_file(config_home().join("tokenharbor_key"));
+    if provider == "aikey" {
+        let _ = fs::remove_file(config_home().join("aikey_key"));
     }
     Ok(())
 }

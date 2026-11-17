@@ -25,11 +25,11 @@ import { Button, Input } from "./ui/primitives";
 
 const PROVIDERS = [
   {
-    name: "tokenharbor",
-    label: "TokenHarbor",
+    name: "aikey",
+    label: "AI Key",
     model: "deepseek-v4.1-flash:free",
     blurb: "Free tier, good quality. The default.",
-    keyHint: "tokenharbor.ai",
+    keyHint: "your AI key",
     needsKey: true,
   },
   {
@@ -77,7 +77,7 @@ export function Onboarding() {
 
   const [step, setStep] = useState(0);
   const [direction, setDirection] = useState(1);
-  const [provider, setProvider] = useState(config?.provider ?? "tokenharbor");
+  const [provider, setProvider] = useState(config?.provider ?? "aikey");
   const [model, setModel] = useState(config?.model ?? "deepseek-v4.1-flash:free");
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);

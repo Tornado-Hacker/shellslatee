@@ -237,7 +237,7 @@ Environment variables read by the desktop shell:
 | --- | --- |
 | Notes / vault | `Documents\Shellslatee Vault\` (configurable in Settings) |
 | Provider keys | `%USERPROFILE%\.config\shellslatee\desktop_keys.json` |
-| TokenHarbor mirror | `%USERPROFILE%\.config\shellslatee\tokenharbor_key` |
+| AI Key mirror | `%USERPROFILE%\.config\shellslatee\aikey_key` |
 | App config | `%USERPROFILE%\.config\shellslatee\desktop.json` |
 
 ### Upgrading from an earlier build
