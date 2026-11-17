@@ -15,22 +15,139 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Read};
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Read;
+use std::io::Write;
+use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use serde_json::{json, Value};
-use tauri::{Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+
+// A GUI process that spawns a console binary (python.exe, curl, pip, the engine)
+// hands it a fresh console window unless told otherwise. CREATE_NO_WINDOW keeps
+// every child headless so nothing flashes on the taskbar.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+fn hide_console(command: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
 
 struct Backend {
     child: Mutex<Option<Child>>,
     base: Mutex<Option<String>>,
     error: Mutex<Option<String>>,
+    // One restart at a time, whether the supervisor or the UI asked for it.
+    restarting: AtomicBool,
     client: reqwest::Client,
+}
+
+const BACKEND_EVENT: &str = "shellslatee://backend";
+
+// ---- crash capture ---------------------------------------------------------
+// A shipped GUI build has no console, so a panic would otherwise vanish. Log it,
+// relaunch once, and only if the relaunched copy also dies show a native box.
+
+fn crash_log_path() -> PathBuf {
+    config_home().join("logs").join("crash.log")
+}
+
+fn write_crash_log(message: &str) -> Option<PathBuf> {
+    let path = crash_log_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).ok()?;
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()?;
+    let _ = writeln!(file, "[{stamp}] {message}");
+    Some(path)
+}
+
+#[cfg(windows)]
+fn show_message(title: &str, body: &str) {
+    #[link(name = "user32")]
+    extern "system" {
+        fn MessageBoxW(
+            hwnd: *mut core::ffi::c_void,
+            text: *const u16,
+            caption: *const u16,
+            utype: u32,
+        ) -> i32;
+    }
+    let text: Vec<u16> = body.encode_utf16().chain(std::iter::once(0)).collect();
+    let caption: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        // MB_OK | MB_ICONERROR | MB_TOPMOST
+        MessageBoxW(core::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), 0x0000_0010 | 0x0004_0000);
+    }
+}
+
+#[cfg(not(windows))]
+fn show_message(title: &str, body: &str) {
+    eprintln!("{title}: {body}");
+}
+
+fn relaunch_once() {
+    if std::env::var("SHELLSLATEE_RELAUNCHED").is_ok() {
+        return;
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        let mut command = Command::new(exe);
+        command.env("SHELLSLATEE_RELAUNCHED", "1");
+        let _ = hide_console(&mut command).spawn();
+    }
+}
+
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let message = format!("panic: {info}");
+        let log = write_crash_log(&message);
+        if std::env::var("SHELLSLATEE_RELAUNCHED").is_ok() {
+            let body = match &log {
+                Some(path) => format!(
+                    "Shellslatee hit an unexpected problem.\n\nDetails were saved to:\n{}\n\nReopen Shellslatee to continue.",
+                    path.display()
+                ),
+                None => "Shellslatee hit an unexpected problem.\n\nReopen Shellslatee to continue.".to_string(),
+            };
+            show_message("Shellslatee", &body);
+        } else {
+            relaunch_once();
+        }
+    }));
+}
+
+// Used where the app cannot continue at all (window or client could not start).
+fn fatal(message: &str) -> ! {
+    let path = write_crash_log(message);
+    let body = match path {
+        Some(path) => format!("{message}\n\nDetails were saved to:\n{}\n\nReopen Shellslatee to continue.", path.display()),
+        None => format!("{message}\n\nReopen Shellslatee to continue."),
+    };
+    show_message("Shellslatee", &body);
+    std::process::exit(1)
 }
 
 fn config_home() -> PathBuf {
@@ -202,7 +319,7 @@ fn python_version(command: &[String]) -> Option<String> {
     for arg in &command[1..] {
         process.arg(arg);
     }
-    let output = process.arg("--version").output().ok()?;
+    let output = hide_console(&mut process).arg("--version").output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -227,10 +344,12 @@ fn probe_python() -> Option<(Vec<String>, String)> {
 }
 
 fn engine_on_path() -> bool {
-    Command::new("shellslatee")
+    let mut command = Command::new("shellslatee");
+    command
         .arg("--version")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    hide_console(&mut command)
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
@@ -259,9 +378,9 @@ fn wheel_candidates(app: &tauri::AppHandle) -> Vec<PathBuf> {
 fn download_file(url: &str, destination: &Path) -> Result<(), String> {
     let target = destination.to_string_lossy().to_string();
     // curl ships with Windows 10+; PowerShell is the fallback.
-    let curl = Command::new("curl")
-        .args(["-L", "--fail", "--silent", "--show-error", "-o", &target, url])
-        .status();
+    let mut curl = Command::new("curl");
+    curl.args(["-L", "--fail", "--silent", "--show-error", "-o", &target, url]);
+    let curl = hide_console(&mut curl).status();
     if let Ok(status) = curl {
         if status.success() {
             return Ok(());
@@ -271,8 +390,9 @@ fn download_file(url: &str, destination: &Path) -> Result<(), String> {
         "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '{url}' -OutFile '{}'",
         target.replace('\'', "''")
     );
-    let status = Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+    let mut powershell = Command::new("powershell");
+    powershell.args(["-NoProfile", "-NonInteractive", "-Command", &script]);
+    let status = hide_console(&mut powershell)
         .status()
         .map_err(|error| format!("could not start a downloader: {error}"))?;
     if status.success() {
@@ -315,8 +435,9 @@ fn install_prereqs(app: tauri::AppHandle) -> Result<Value, String> {
                 download_file(PYTHON_URL, &installer)?;
             }
             steps.push("Python 3.12.6 downloaded".to_string());
-            let status = Command::new(&installer)
-                .args(["/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_test=0", "Include_launcher=1"])
+            let mut setup = Command::new(&installer);
+            setup.args(["/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_test=0", "Include_launcher=1"]);
+            let status = hide_console(&mut setup)
                 .status()
                 .map_err(|error| format!("could not start the Python installer: {error}"))?;
             if !status.success() {
@@ -338,7 +459,7 @@ fn install_prereqs(app: tauri::AppHandle) -> Result<Value, String> {
     for arg in &python[1..] {
         command.arg(arg);
     }
-    let output = command
+    let output = hide_console(&mut command)
         .args(["-m", "pip", "install", "--user", "--upgrade"])
         .arg(&wheel)
         .output()
@@ -378,12 +499,13 @@ fn spawn_backend(keys: &HashMap<String, String>) -> Result<(Child, String), Stri
     // banner we parse survives intact.
     command.env("PYTHONIOENCODING", "utf-8").env("PYTHONUTF8", "1");
 
-    let mut child = command
+    let mut child = hide_console(&mut command)
         .arg("serve")
         .arg("--port")
         .arg("0")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
+        .stdin(Stdio::null())
         .spawn()
         .map_err(|error| {
             format!(
@@ -480,6 +602,95 @@ fn kill_child(state: &Backend) {
             let _ = child.wait();
         }
     }
+}
+
+fn status_snapshot(state: &Backend) -> Value {
+    let base = state.base.lock().ok().and_then(|guard| guard.clone());
+    let error = state.error.lock().ok().and_then(|guard| guard.clone());
+    json!({ "ready": base.is_some(), "base": base, "error": error, "version": null })
+}
+
+// Kill whatever was running, start a fresh engine, record the new loopback URL.
+// The caller decides whether to surface the result; the supervisor and the
+// `restart_backend` command both land here so the policy lives in one place.
+fn restart_engine(state: &Backend) -> Result<String, String> {
+    kill_child(state);
+    let keys = read_keys();
+    match spawn_backend(&keys) {
+        Ok((child, url)) => {
+            if let Ok(mut guard) = state.child.lock() {
+                *guard = Some(child);
+            }
+            if let Ok(mut guard) = state.base.lock() {
+                *guard = Some(url.clone());
+            }
+            if let Ok(mut guard) = state.error.lock() {
+                *guard = None;
+            }
+            Ok(url)
+        }
+        Err(error) => {
+            if let Ok(mut guard) = state.base.lock() {
+                *guard = None;
+            }
+            if let Ok(mut guard) = state.error.lock() {
+                *guard = Some(error.clone());
+            }
+            Err(error)
+        }
+    }
+}
+
+fn engine_port_alive(base: &str) -> bool {
+    let authority = match base.strip_prefix("http://") {
+        Some(authority) => authority,
+        None => return false,
+    };
+    let address: SocketAddr = match authority.parse() {
+        Ok(address) => address,
+        Err(_) => return false,
+    };
+    TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok()
+}
+
+// Watches the engine and brings it back on its own when it dies (engine panic,
+// OOM, an over-eager antivirus kill). Only supervises an engine that came up at
+// least once, so a machine without the engine installed is left to the setup UI.
+fn start_supervisor(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let mut streak: u32 = 0;
+        loop {
+            std::thread::sleep(Duration::from_secs(2));
+            let state = app.state::<Backend>();
+            let backend = state.inner();
+            let base = match backend.base.lock().ok().and_then(|guard| guard.clone()) {
+                Some(base) => base,
+                None => continue,
+            };
+            if engine_port_alive(&base) {
+                streak = 0;
+                continue;
+            }
+            // A single dropped connection is not a crash; confirm before acting.
+            std::thread::sleep(Duration::from_millis(700));
+            if engine_port_alive(&base) {
+                continue;
+            }
+            if backend.restarting.swap(true, Ordering::SeqCst) {
+                continue;
+            }
+            let result = restart_engine(backend);
+            backend.restarting.store(false, Ordering::SeqCst);
+            if result.is_err() {
+                streak = (streak + 1).min(5);
+            }
+            let _ = app.emit(BACKEND_EVENT, status_snapshot(backend));
+            if result.is_err() {
+                let backoff = Duration::from_millis(500u64 * (1u64 << streak));
+                std::thread::sleep(backoff.min(Duration::from_secs(20)));
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -652,30 +863,14 @@ async fn backend_status(state: State<'_, Backend>) -> Result<Value, String> {
 
 #[tauri::command]
 fn restart_backend(state: State<'_, Backend>) -> Result<Value, String> {
-    kill_child(&state);
-    let keys = read_keys();
-    match spawn_backend(&keys) {
-        Ok((child, url)) => {
-            if let Ok(mut guard) = state.child.lock() {
-                *guard = Some(child);
-            }
-            if let Ok(mut guard) = state.base.lock() {
-                *guard = Some(url.clone());
-            }
-            if let Ok(mut guard) = state.error.lock() {
-                *guard = None;
-            }
-            Ok(json!({ "ready": true, "base": url, "error": null, "version": null }))
-        }
-        Err(error) => {
-            if let Ok(mut guard) = state.base.lock() {
-                *guard = None;
-            }
-            if let Ok(mut guard) = state.error.lock() {
-                *guard = Some(error.clone());
-            }
-            Ok(json!({ "ready": false, "base": null, "error": error, "version": null }))
-        }
+    if state.restarting.swap(true, Ordering::SeqCst) {
+        return Ok(status_snapshot(&state));
+    }
+    let result = restart_engine(&state);
+    state.restarting.store(false, Ordering::SeqCst);
+    match result {
+        Ok(url) => Ok(json!({ "ready": true, "base": url, "error": null, "version": null })),
+        Err(error) => Ok(json!({ "ready": false, "base": null, "error": error, "version": null })),
     }
 }
 
@@ -702,15 +897,18 @@ fn default_vault() -> Result<String, String> {
 }
 
 fn main() {
+    install_panic_hook();
+
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(600))
         .build()
-        .expect("could not build the HTTP client");
+        .unwrap_or_else(|error| fatal(&format!("could not build the HTTP client: {error}")));
 
     let state = Backend {
         child: Mutex::new(None),
         base: Mutex::new(None),
         error: Mutex::new(None),
+        restarting: AtomicBool::new(false),
         client,
     };
 
@@ -752,15 +950,33 @@ fn main() {
                 }
             }
 
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+            // Keep the engine alive on its own: a crash restarts it and the UI
+            // is told over the event bus instead of asking the user to retry.
+            start_supervisor(app.handle().clone());
+
+            // Fit the window to the monitor: a hard 1320 logical px overflows
+            // 1366x768 screens at 125% scaling (1229x614 logical).
+            let (mut width, mut height) = (1320.0_f64, 880.0_f64);
+            if let Ok(Some(monitor)) = app.primary_monitor() {
+                let scale = monitor.scale_factor();
+                let usable = monitor.size().to_logical::<f64>(scale);
+                width = width.min((usable.width * 0.94).max(900.0));
+                height = height.min((usable.height * 0.90).max(600.0));
+            }
+
+            if let Err(error) = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
                 .title("Shellslatee")
-                .inner_size(1320.0, 880.0)
-                .min_inner_size(960.0, 640.0)
-                .build()?;
+                .inner_size(width, height)
+                .min_inner_size(880.0, 560.0)
+                .center()
+                .build()
+            {
+                fatal(&format!("could not create the Shellslatee window: {error}"));
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("failed to build the Shellslatee window")
+        .unwrap_or_else(|error| fatal(&format!("failed to start Shellslatee: {error}")))
         .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
                 if let Some(state) = app.try_state::<Backend>() {

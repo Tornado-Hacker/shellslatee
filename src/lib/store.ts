@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api, setApiBase } from "./api";
-import { bridge } from "./bridge";
+import { bridge, isTauri } from "./bridge";
 import type { AppConfig, BackendStatus, Vault } from "./types";
 
 export type Tone = "info" | "success" | "error";
@@ -28,6 +28,7 @@ type Store = {
 };
 
 let toastSeq = 1;
+let backendSubscribed = false;
 
 function applyAppearance(config: AppConfig) {
   const root = document.documentElement;
@@ -60,6 +61,14 @@ export const useStore = create<Store>((set, get) => ({
     setApiBase(backend.base);
     set({ backend, initialized: true });
     if (backend.ready && config.vault) await get().refresh();
+
+    if (isTauri && !backendSubscribed) {
+      backendSubscribed = true;
+      void bridge.onBackendStatus((status) => {
+        get().setBackend(status);
+        if (status.ready && get().config?.vault) void get().refresh();
+      });
+    }
   },
 
   async update(patch) {

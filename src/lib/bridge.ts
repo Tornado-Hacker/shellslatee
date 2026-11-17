@@ -103,6 +103,17 @@ export const bridge = {
     return call<BackendStatus>("restart_backend");
   },
 
+  // The shell restarts a crashed engine on its own and pushes the fresh status
+  // here, so the UI can recover without the user pressing "try again".
+  async onBackendStatus(callback: (status: BackendStatus) => void): Promise<() => void> {
+    if (!isTauri) return () => {};
+    const { listen } = await import("@tauri-apps/api/event");
+    const unlisten = await listen<BackendStatus>("shellslatee://backend", (event) => callback(event.payload));
+    return () => {
+      unlisten();
+    };
+  },
+
   async saveApiKey(provider: string, key: string): Promise<void> {
     if (isTauri) return call<void>("save_api_key", { provider, key });
     localStorage.setItem(`shellslatee.key.${provider}`, key);

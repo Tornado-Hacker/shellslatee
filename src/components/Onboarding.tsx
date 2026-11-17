@@ -171,7 +171,7 @@ export function Onboarding() {
       <div className="pointer-events-none absolute -left-40 top-1/4 h-[420px] w-[420px] rounded-full bg-accent/20 blur-[120px]" />
       <div className="pointer-events-none absolute -right-32 bottom-0 h-[380px] w-[380px] rounded-full bg-iris/20 blur-[120px]" />
 
-      <div className="relative z-10 hidden w-[46%] flex-col justify-between p-12 lg:flex">
+      <div className="relative z-10 hidden w-[46%] flex-col justify-between p-12 xl:flex">
         <div className="flex items-center gap-3">
           <div className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-accent to-iris text-base font-bold text-white shadow-glow">
             S
@@ -232,7 +232,7 @@ export function Onboarding() {
         </p>
       </div>
 
-      <div className="relative z-10 flex flex-1 items-center justify-center p-5">
+      <div className="relative z-10 flex min-w-0 flex-1 items-start justify-center overflow-y-auto p-5 sm:items-center">
         <div className="w-full max-w-[520px] rounded-xl3 border bg-surface/85 p-7 shadow-lift backdrop-blur-xl">
           <div className="mb-6 flex items-center justify-between">
             <div className="flex items-center gap-2">

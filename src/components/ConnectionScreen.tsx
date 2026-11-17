@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { Check, Download, Loader2, RefreshCw, ServerCrash, Settings2, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { bridge, isTauri } from "@/lib/bridge";
 import { useStore } from "@/lib/store";
 import type { PrereqReport } from "@/lib/types";
@@ -56,7 +56,7 @@ export function ConnectionScreen() {
   const missingEngine = prereqs ? !prereqs.engine : false;
   const anythingMissing = desktop && (missingPython || missingEngine);
 
-  const retry = async () => {
+  const retry = useCallback(async () => {
     setBusy(true);
     setProblem(null);
     try {
@@ -71,7 +71,35 @@ export function ConnectionScreen() {
     } finally {
       setBusy(false);
     }
-  };
+  }, [notify, refresh, setBackend]);
+
+  // The shell already restarts a crashed engine; this keeps the screen honest
+  // while it comes back, so nobody has to mash "try again".
+  useEffect(() => {
+    if (!desktop || backend.ready || anythingMissing || installing) return;
+    if (!prereqs?.ready) return;
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled || busy) return;
+      try {
+        const status = await bridge.backendStatus();
+        if (cancelled) return;
+        if (status.ready) {
+          setBackend(status);
+          await refresh();
+        }
+      } catch {
+        /* the supervisor is still working; try again next tick */
+      }
+    };
+    const id = window.setInterval(() => {
+      void tick();
+    }, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [anythingMissing, backend.ready, busy, desktop, installing, prereqs?.ready, refresh, setBackend]);
 
   const install = async () => {
     setInstalling(true);
@@ -185,6 +213,12 @@ export function ConnectionScreen() {
         {installing ? (
           <p className="mt-3 flex items-center justify-end gap-2 text-[11px] text-muted">
             <Loader2 className="h-3 w-3 animate-spin" /> installing, this takes about a minute…
+          </p>
+        ) : null}
+
+        {desktop && prereqs?.ready && !backend.ready && !anythingMissing ? (
+          <p className="mt-3 flex items-center gap-2 text-[11px] text-muted">
+            <Loader2 className="h-3 w-3 animate-spin" /> Recovering the engine automatically…
           </p>
         ) : null}
 
