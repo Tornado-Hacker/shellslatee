@@ -893,19 +893,42 @@ fn notes_marker_path() -> PathBuf {
     config_home().join("notes_dir.txt")
 }
 
+fn dir_is_writable(path: &Path) -> bool {
+    if fs::create_dir_all(path).is_err() {
+        return false;
+    }
+    let probe = path.join(".shellslatee-write-test");
+    match fs::write(&probe, b"ok") {
+        Ok(()) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 #[tauri::command]
 fn default_vault() -> Result<String, String> {
     let home = dirs::home_dir().ok_or_else(|| "could not find the home directory".to_string())?;
-    let marked = fs::read_to_string(notes_marker_path())
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
-    let vault = marked.unwrap_or_else(|| dirs::document_dir().unwrap_or(home).join("Shellslatee Notes"));
-    fs::create_dir_all(&vault).map_err(|error| format!("could not create {}: {error}", vault.display()))?;
-    // Remember it for next time, even when the folder came from the fallback.
-    let _ = write_atomic(&notes_marker_path(), &vault.to_string_lossy());
-    Ok(vault.to_string_lossy().to_string())
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    // The installer's choice wins when that folder is still writable.
+    if let Ok(marked) = fs::read_to_string(notes_marker_path()) {
+        let marked = marked.trim();
+        if !marked.is_empty() {
+            candidates.push(PathBuf::from(marked));
+        }
+    }
+    candidates.push(home.join("Shellslatee Notes"));
+    if let Some(local) = dirs::data_local_dir() {
+        candidates.push(local.join("Shellslatee").join("Notes"));
+    }
+    for candidate in candidates {
+        if dir_is_writable(&candidate) {
+            let _ = write_atomic(&notes_marker_path(), &candidate.to_string_lossy());
+            return Ok(candidate.to_string_lossy().to_string());
+        }
+    }
+    Err("no writable folder for notes; allow Shellslatee in antivirus folder protection or pick another folder".to_string())
 }
 
 fn main() {
@@ -942,6 +965,9 @@ fn main() {
             install_prereqs
         ])
         .setup(|app| {
+            // Materialize the notes folder at startup; a locked-down Documents
+            // folder makes default_vault fall back to the user profile.
+            let _ = default_vault();
             {
                 let state = app.state::<Backend>();
                 let keys = read_keys();

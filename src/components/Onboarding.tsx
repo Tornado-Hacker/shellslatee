@@ -147,11 +147,15 @@ export function Onboarding() {
       if (providerInfo.needsKey && apiKey.trim()) await bridge.saveApiKey(provider, apiKey.trim());
       let vaultPath = vault.trim();
       if (!vaultPath) {
-        try {
-          vaultPath = await bridge.defaultVault();
-        } catch {
-          vaultPath = "";
-        }
+        vaultPath = await bridge.defaultVault().catch(() => "");
+      }
+      if (!vaultPath) {
+        notify(
+          "No notes folder",
+          "Windows blocked the folder we tried to create. Allow Shellslatee in antivirus folder protection, then try again.",
+          "error",
+        );
+        return;
       }
       await update({
         onboarded: true,
@@ -472,7 +476,7 @@ export function Onboarding() {
                     </div>
                     <div className="space-y-2 rounded-xl2 border bg-bg/50 p-4 text-[12px]">
                       <Row label="Provider" value={`${providerInfo.label} · ${model}`} />
-                      <Row label="Notes folder" value={vault || "Documents\\Shellslatee Notes"} mono />
+                      <Row label="Notes folder" value={vault || "Shellslatee Notes (your profile)"} mono />
                       <Row label="Sources" value={source || "none yet"} mono />
                       <Row label="Key" value={providerInfo.needsKey ? (apiKey.trim() ? "saved locally" : "not provided") : "not needed"} />
                     </div>
@@ -496,7 +500,7 @@ export function Onboarding() {
                 Continue
               </Button>
             ) : (
-              <Button onClick={finish} loading={finishing} disabled={!vault.trim()}>
+              <Button onClick={finish} loading={finishing}>
                 Enter Shellslatee
               </Button>
             )}
