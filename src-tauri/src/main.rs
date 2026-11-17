@@ -17,7 +17,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::BufRead;
 use std::io::BufReader;
-use std::io::Read;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::net::TcpStream;
@@ -888,13 +887,13 @@ fn open_path(path: String) -> Result<(), String> {
     result.map(|_| ()).map_err(|error| format!("could not open {path}: {error}"))
 }
 
-#[tauri::command]
 // The installer writes the notes folder it created to this file so the app and
 // the setup screen agree on one location instead of guessing.
 fn notes_marker_path() -> PathBuf {
     config_home().join("notes_dir.txt")
 }
 
+#[tauri::command]
 fn default_vault() -> Result<String, String> {
     let home = dirs::home_dir().ok_or_else(|| "could not find the home directory".to_string())?;
     let marked = fs::read_to_string(notes_marker_path())
