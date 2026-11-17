@@ -1,6 +1,6 @@
 [package]
 name = "shellslatee-studio"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Shellslatee: a local-first study cockpit with a bring-your-own-key tutor"
 license = "MIT"

@@ -15,7 +15,7 @@ import {
   Wand2,
   XCircle,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { bridge } from "@/lib/bridge";
 import { celebrate } from "@/lib/celebrate";
 import { slideStep } from "@/lib/motion";
@@ -66,7 +66,7 @@ const PROVIDERS = [
   },
 ] as const;
 
-const STEPS = ["Welcome", "Model", "Vault", "Ready"];
+const STEPS = ["Welcome", "Model", "Sources", "Ready"];
 
 export function Onboarding() {
   const config = useStore((state) => state.config);
@@ -118,10 +118,24 @@ export function Onboarding() {
     }
   };
 
-  const pickVault = async () => {
-    const picked = await bridge.pickFolder("Choose where notes are written");
-    if (picked) setVault(picked);
-  };
+  // The installer creates the notes folder; only fill it in here if this is a
+  // dev run or the installer did not leave a marker.
+  useEffect(() => {
+    if (vault.trim()) return;
+    let alive = true;
+    bridge
+      .defaultVault()
+      .then((suggested) => {
+        if (alive && suggested) setVault(suggested);
+      })
+      .catch(() => {
+        /* Settings still allows choosing a folder later */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [vault]);
+
   const pickSource = async () => {
     const picked = await bridge.pickFolder("Choose the folder with your videos and slides");
     if (picked) setSource(picked);
@@ -131,9 +145,17 @@ export function Onboarding() {
     setFinishing(true);
     try {
       if (providerInfo.needsKey && apiKey.trim()) await bridge.saveApiKey(provider, apiKey.trim());
+      let vaultPath = vault.trim();
+      if (!vaultPath) {
+        try {
+          vaultPath = await bridge.defaultVault();
+        } catch {
+          vaultPath = "";
+        }
+      }
       await update({
         onboarded: true,
-        vault: vault.trim(),
+        vault: vaultPath,
         source: source.trim(),
         provider,
         model,
@@ -164,7 +186,7 @@ export function Onboarding() {
   const canNext =
     step === 0 ||
     (step === 1 && (!providerInfo.needsKey || apiKey.trim().length > 0)) ||
-    (step === 2 && vault.trim().length > 0);
+    step === 2;
 
   return (
     <div className="grain relative flex h-screen overflow-hidden bg-bg">
@@ -399,31 +421,13 @@ export function Onboarding() {
                 {step === 2 ? (
                   <>
                     <div>
-                      <h2 className="font-display text-2xl">Where do notes live?</h2>
+                      <h2 className="font-display text-2xl">Where are your lectures?</h2>
                       <p className="mt-1.5 text-sm text-muted">
-                        A folder on your disk. Plain Markdown, no lock-in, readable in any editor.
+                        Notes are already saved to Documents\Shellslatee Notes. Point at the
+                        folder with your videos, slides or PDFs if you have one.
                       </p>
                     </div>
                     <div className="space-y-3">
-                      <div>
-                        <label className="label">Notes vault (output)</label>
-                        <div className="flex gap-2">
-                          <Input value={vault} onChange={(event) => setVault(event.target.value)} placeholder="C:\\Users\\you\\Shellslatee\\notes" className="font-mono text-xs" />
-                          <Button variant="outline" size="sm" onClick={pickVault} icon={<FolderOpen className="h-3.5 w-3.5" />}>
-                            Browse
-                          </Button>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            const suggestion = await bridge.defaultVault();
-                            if (suggestion) setVault(suggestion);
-                          }}
-                          className="mt-1.5 text-[11px] text-accent underline-offset-2 hover:underline"
-                        >
-                          Use the default location (Documents / Shellslatee Notes)
-                        </button>
-                      </div>
                       <div>
                         <label className="label">Course sources (optional)</label>
                         <div className="flex gap-2">
@@ -468,7 +472,7 @@ export function Onboarding() {
                     </div>
                     <div className="space-y-2 rounded-xl2 border bg-bg/50 p-4 text-[12px]">
                       <Row label="Provider" value={`${providerInfo.label} · ${model}`} />
-                      <Row label="Vault" value={vault || "not set"} mono />
+                      <Row label="Notes folder" value={vault || "Documents\\Shellslatee Notes"} mono />
                       <Row label="Sources" value={source || "none yet"} mono />
                       <Row label="Key" value={providerInfo.needsKey ? (apiKey.trim() ? "saved locally" : "not provided") : "not needed"} />
                     </div>
