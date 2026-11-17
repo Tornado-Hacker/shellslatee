@@ -63,7 +63,7 @@ local config. No account, no sync server, no telemetry.
 | --- | --- | --- |
 | Windows 10 21H2+ or 11, x64 | Runs the app | — |
 | WebView2 Runtime | Renders the UI | Preinstalled on Windows 11; [evergreen installer](https://developer.microsoft.com/microsoft-edge/webview2/) on 10 |
-| Python 3.11 or 3.12 | Runs the local engine | [python.org](https://www.python.org/downloads/windows/) — tick **Add python.exe to PATH** |
+| Python 3.10+ (optional) | Runs the local engine | The app can download and install it for you — only tick *Add python.exe to PATH* if installing manually |
 | An API key | Powers notes, quizzes, tutor | Any OpenAI-compatible provider |
 
 ### Step 1 — Install the app
@@ -77,28 +77,33 @@ Download the installer from
 Run it. SmartScreen will warn because the build is unsigned — choose
 **More info → Run anyway**.
 
-### Step 2 — Install the local engine
+### Step 2 — Let the app install the engine
 
-The app is a cockpit; the engine does the heavy lifting. Install it into your
-user Python:
+Start **Shellslatee**. On first launch it checks two things and shows a short
+setup card:
+
+| Piece | What happens |
+| --- | --- |
+| Python 3.10+ | Found automatically. If missing, the app offers to download the official Python installer (per-user, no admin). |
+| Local engine | **Bundled inside the installer** — installing it takes seconds, no download. |
+
+Tick **"Install the missing software for me"** and press the button. The app
+downloads Python only if it has to, installs the bundled engine wheel, restarts
+the engine, and walks you into setup. One click, no terminal.
+
+<details>
+<summary>Prefer the command line?</summary>
+
+Download the engine wheel from [Releases](https://github.com/Tornado-Hacker/shellslatee/releases)
+and install it yourself:
 
 ```powershell
-# download the engine wheel from Releases next to the installer, then:
 python -m pip install --user --upgrade .\shellslatee_engine-0.2.0-py3-none-any.whl
 ```
 
-> [!IMPORTANT]
-> The engine is **not on PyPI yet**. Install the wheel attached to the
-> Shellslatee release — `pip install shellslatee-engine` will fail until it is
-> published.
+The engine is not on PyPI yet — install the wheel from the release.
 
-Verify it landed where the app looks:
-
-```powershell
-shellslatee --version
-# if the command is not found, the app still finds it under
-# %APPDATA%\Python\Python312\Scripts\shellslatee.exe — no PATH editing required
-```
+</details>
 
 ### Step 3 — Launch
 

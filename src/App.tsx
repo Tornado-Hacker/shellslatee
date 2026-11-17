@@ -5,6 +5,7 @@ import { ConnectionScreen } from "./components/ConnectionScreen";
 import { Onboarding } from "./components/Onboarding";
 import { Shell } from "./components/Shell";
 import { Toasts } from "./components/ui/Toasts";
+import { isTauri } from "./lib/bridge";
 import { useStore } from "./lib/store";
 import { AskPage } from "./pages/AskPage";
 import { GraphPage } from "./pages/GraphPage";
@@ -69,13 +70,13 @@ export default function App() {
   return (
     <>
       <AnimatePresence mode="wait">
-        {!config.onboarded ? (
-          <motion.div key="onboarding" className="h-screen" exit={{ opacity: 0 }}>
-            <Onboarding />
-          </motion.div>
-        ) : !backend.ready ? (
+        {isTauri && !backend.ready ? (
           <motion.div key="connection" className="h-screen" exit={{ opacity: 0 }}>
             <ConnectionScreen />
+          </motion.div>
+        ) : !config.onboarded ? (
+          <motion.div key="onboarding" className="h-screen" exit={{ opacity: 0 }}>
+            <Onboarding />
           </motion.div>
         ) : (
           <HashRouter key="app">

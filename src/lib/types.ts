@@ -229,3 +229,12 @@ export type BackendStatus = {
 };
 
 export type VerifyResult = { ok: boolean; detail: string };
+
+export type PrereqReport = {
+  python: string | null;
+  python_hint: string | null;
+  engine: boolean;
+  wheel: boolean;
+  wheel_path: string | null;
+  ready: boolean;
+};

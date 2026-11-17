@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -177,6 +177,183 @@ fn engine_from_user_scripts() -> Option<PathBuf> {
     None
 }
 
+
+// ---- one-click setup -------------------------------------------------------
+// The app ships the engine wheel as a bundled resource, so a fresh install only
+// needs Python on the machine. When Python is missing the setup screen can
+// download the official installer and run it per-user, silently.
+const ENGINE_WHEEL: &str = "shellslatee_engine-0.2.0-py3-none-any.whl";
+const PYTHON_URL: &str = "https://www.python.org/ftp/python/3.12.6/python-3.12.6-amd64.exe";
+
+fn python_candidates() -> Vec<Vec<String>> {
+    if cfg!(windows) {
+        vec![
+            vec!["python".to_string()],
+            vec!["py".to_string(), "-3".to_string()],
+            vec!["python3".to_string()],
+        ]
+    } else {
+        vec![vec!["python3".to_string()], vec!["python".to_string()]]
+    }
+}
+
+fn python_version(command: &[String]) -> Option<String> {
+    let mut process = Command::new(&command[0]);
+    for arg in &command[1..] {
+        process.arg(arg);
+    }
+    let output = process.arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = if output.stdout.is_empty() {
+        String::from_utf8_lossy(&output.stderr).trim().to_string()
+    } else {
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    };
+    text.strip_prefix("Python ").map(|value| value.trim().to_string())
+}
+
+fn probe_python() -> Option<(Vec<String>, String)> {
+    for candidate in python_candidates() {
+        if let Some(version) = python_version(&candidate) {
+            let parts: Vec<u32> = version.split('.').take(2).filter_map(|part| part.parse().ok()).collect();
+            if parts.len() == 2 && (parts[0] > 3 || (parts[0] == 3 && parts[1] >= 10)) {
+                return Some((candidate, version));
+            }
+        }
+    }
+    None
+}
+
+fn engine_on_path() -> bool {
+    Command::new("shellslatee")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn wheel_candidates(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(dir) = app.path().resource_dir() {
+        candidates.push(dir.join("resources").join(ENGINE_WHEEL));
+        candidates.push(dir.join(ENGINE_WHEEL));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join("resources").join(ENGINE_WHEEL));
+            candidates.push(dir.join(ENGINE_WHEEL));
+        }
+    }
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("src-tauri").join("resources").join(ENGINE_WHEEL));
+        candidates.push(cwd.join("resources").join(ENGINE_WHEEL));
+        candidates.push(cwd.join("dist-engine").join(ENGINE_WHEEL));
+    }
+    candidates
+}
+
+fn download_file(url: &str, destination: &Path) -> Result<(), String> {
+    let target = destination.to_string_lossy().to_string();
+    // curl ships with Windows 10+; PowerShell is the fallback.
+    let curl = Command::new("curl")
+        .args(["-L", "--fail", "--silent", "--show-error", "-o", &target, url])
+        .status();
+    if let Ok(status) = curl {
+        if status.success() {
+            return Ok(());
+        }
+    }
+    let script = format!(
+        "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '{url}' -OutFile '{}'",
+        target.replace('\'', "''")
+    );
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .status()
+        .map_err(|error| format!("could not start a downloader: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("the Python download failed — check your connection and try again".to_string())
+    }
+}
+
+#[tauri::command]
+fn check_prereqs(app: tauri::AppHandle) -> Value {
+    let python = probe_python();
+    let wheel = wheel_candidates(&app).into_iter().find(|path| path.is_file());
+    let engine = engine_from_user_scripts().is_some() || engine_on_path();
+    let ready = python.is_some() && engine;
+    json!({
+        "python": python.as_ref().map(|(_, version)| version.clone()),
+        "python_hint": python.as_ref().map(|(command, _)| command.join(" ")),
+        "engine": engine,
+        "wheel": wheel.is_some(),
+        "wheel_path": wheel.as_ref().map(|path| path.display().to_string()),
+        "ready": ready,
+    })
+}
+
+#[tauri::command]
+fn install_prereqs(app: tauri::AppHandle) -> Result<Value, String> {
+    let mut steps: Vec<String> = Vec::new();
+
+    let (python, version) = match probe_python() {
+        Some(found) => found,
+        None => {
+            if !cfg!(windows) {
+                return Err("Install Python 3.10+ with your package manager, then retry.".to_string());
+            }
+            let dir = std::env::temp_dir().join("shellslatee-setup");
+            fs::create_dir_all(&dir).map_err(|error| format!("could not create {}: {error}", dir.display()))?;
+            let installer = dir.join("python-3.12.6-amd64.exe");
+            if !installer.is_file() {
+                download_file(PYTHON_URL, &installer)?;
+            }
+            steps.push("Python 3.12.6 downloaded".to_string());
+            let status = Command::new(&installer)
+                .args(["/quiet", "InstallAllUsers=0", "PrependPath=1", "Include_test=0", "Include_launcher=1"])
+                .status()
+                .map_err(|error| format!("could not start the Python installer: {error}"))?;
+            if !status.success() {
+                return Err(format!("the Python installer exited with {status}"));
+            }
+            steps.push("Python 3.12.6 installed".to_string());
+            probe_python().ok_or_else(|| {
+                "Python installed but not visible yet — restart Windows, then open Shellslatee again".to_string()
+            })?
+        }
+    };
+
+    let wheel = wheel_candidates(&app)
+        .into_iter()
+        .find(|path| path.is_file())
+        .ok_or_else(|| "this build is missing the engine wheel — reinstall Shellslatee".to_string())?;
+
+    let mut command = Command::new(&python[0]);
+    for arg in &python[1..] {
+        command.arg(arg);
+    }
+    let output = command
+        .args(["-m", "pip", "install", "--user", "--upgrade"])
+        .arg(&wheel)
+        .output()
+        .map_err(|error| format!("could not run pip: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let tail: Vec<&str> = stderr.lines().rev().take(4).collect();
+        let tail: Vec<&str> = tail.into_iter().rev().collect();
+        return Err(format!("pip failed: {}", tail.join(" | ")));
+    }
+    steps.push("local engine installed".to_string());
+
+    Ok(json!({ "ok": true, "python": version, "steps": steps }))
+}
+
 fn spawn_backend(keys: &HashMap<String, String>) -> Result<(Child, String), String> {
     let mut command = if let Ok(bin) = std::env::var("SHELLSLATEE_BIN") {
         Command::new(bin)
@@ -197,6 +374,9 @@ fn spawn_backend(keys: &HashMap<String, String>) -> Result<(Child, String), Stri
             command.env(name, key);
         }
     }
+    // Windows pipes default to the ANSI code page; force UTF-8 so the startup
+    // banner we parse survives intact.
+    command.env("PYTHONIOENCODING", "utf-8").env("PYTHONUTF8", "1");
 
     let mut child = command
         .arg("serve")
@@ -221,21 +401,50 @@ fn spawn_backend(keys: &HashMap<String, String>) -> Result<(Child, String), Stri
     };
 
     let (tx, rx) = mpsc::channel::<String>();
+    let tail: std::sync::Arc<Mutex<Vec<String>>> = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let tail_writer = tail.clone();
     std::thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            if let Some(rest) = line.split("shellslatee serve: http://").nth(1) {
-                let _ = tx.send(format!("http://{}", rest.trim()));
+        let mut reader = BufReader::new(stderr);
+        let mut buffer: Vec<u8> = Vec::new();
+        loop {
+            buffer.clear();
+            match reader.read_until(b'\n', &mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    // Decode lossily: a stray non-UTF-8 byte must never stall the
+                    // reader, because the URL line arrives after the banner.
+                    let line = String::from_utf8_lossy(&buffer).trim().to_string();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    if let Ok(mut log) = tail_writer.lock() {
+                        log.push(line.clone());
+                        if log.len() > 6 {
+                            log.remove(0);
+                        }
+                    }
+                    if let Some(rest) = line.split("shellslatee serve: http://").nth(1) {
+                        let _ = tx.send(format!("http://{}", rest.trim()));
+                    }
+                }
             }
         }
     });
 
-    let url = match rx.recv_timeout(Duration::from_secs(25)) {
+    let url = match rx.recv_timeout(Duration::from_secs(30)) {
         Ok(url) => url,
         Err(_) => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err("the engine did not report a loopback URL in time".to_string());
+            let detail = tail
+                .lock()
+                .map(|log| log.join(" | "))
+                .unwrap_or_default();
+            return Err(if detail.is_empty() {
+                "the engine did not report a loopback URL in time".to_string()
+            } else {
+                format!("the engine did not report a loopback URL in time ({detail})")
+            });
         }
     };
 
@@ -518,7 +727,9 @@ fn main() {
             clear_api_key,
             verify_api_key,
             open_path,
-            default_vault
+            default_vault,
+            check_prereqs,
+            install_prereqs
         ])
         .setup(|app| {
             {

@@ -1,4 +1,4 @@
-import type { AppConfig, BackendStatus, Theme, VerifyResult } from "./types";
+import type { AppConfig, BackendStatus, PrereqReport, Theme, VerifyResult } from "./types";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -85,6 +85,17 @@ export const bridge = {
     } catch {
       return { ready: false, base: null, error: "backend not reachable", version: null };
     }
+  },
+
+  async checkPrereqs(): Promise<PrereqReport> {
+    if (!isTauri) {
+      return { python: null, python_hint: null, engine: false, wheel: false, wheel_path: null, ready: false };
+    }
+    return call<PrereqReport>("check_prereqs");
+  },
+
+  async installPrereqs(): Promise<{ ok: boolean; python?: string; steps?: string[] }> {
+    return call<{ ok: boolean; python?: string; steps?: string[] }>("install_prereqs");
   },
 
   async restartBackend(): Promise<BackendStatus> {
