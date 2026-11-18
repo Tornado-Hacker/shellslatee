@@ -585,4 +585,28 @@ Platform-assuming ASR tests were also made Windows-aware; `unittest` is now
   boundary is in place and the 30-minute path runs over the same API the GUI
   uses.
 
+---
+
+## 18. Uninstall options — 2026-11-18
+
+The stock Tauri uninstaller removed only the program directory, shortcuts and
+(optionally) `%APPDATA%\app.shellslatee.desktop`. Everything the app provisions
+outside that — the ASR stack, the pip-installed engine, the config and key
+files — survived an uninstall.
+
+Added an uninstaller window (`src-tauri/installer.nsh`) that asks what to
+remove. Nothing is deleted unless its box is ticked, so silent and update-mode
+uninstalls leave user data alone.
+
+| Option | Default | Removes |
+| --- | --- | --- |
+| Downloaded speech tools and models | on | `%LOCALAPPDATA%\Shellslatee` (ffmpeg/ffprobe/model/cache, ~385 MB), HuggingFace cache, pip cache |
+| Settings and saved API keys | on | `%USERPROFILE%\.config\shellslatee` (desktop.json, desktop_keys.dat, aikey_key, notes_dir.txt, install.log) |
+| Local engine Python packages | on | `pip uninstall shellslatee-engine faster-whisper ctranslate2` via `python` or `py -3`; Python itself is left installed |
+| Also delete my notes folder | **off** | the folder recorded in `notes_dir.txt`, guarded against drive roots and profile shell folders |
+
+The app and engine processes are killed first. Verified the installer still
+builds and the setup grew by ~7 KB; the page is skipped in `/S` mode.
+
+
 
