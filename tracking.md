@@ -494,3 +494,52 @@ change on every rebuild.
 
 That leaves 0.3.0 blocking on: signing (D7), a budget ceiling, a 30-minute
 lecture on a clean VM, and a GUI click-through of first-run.
+
+---
+
+## 16. 0.3.0 "Voice" build pass — 2026-11-18
+
+Closed in code this pass: the hard budget ceiling, DPAPI-sealed key storage,
+the first-run error boundary, and signing wired into `build.ps1` (active only
+when a certificate is present). Version bumped to 0.3.0 across shell and engine.
+
+### What changed
+
+| Item | Change |
+| --- | --- |
+| Budget ceiling | Engine `run` gains `--max-cost` / `--allow-over-budget`; `serve` maps `max_cost`, treats exit 3 as `done` (stopped, not failed); UI adds "Cost ceiling per run (USD)" in Settings, persisted as `maxCostUsd` and passed to `api.run`. Preflight warns; the executor stops submitting once spent ≥ ceiling and marks the rest `skip(reason=budget)`, emitting `budget_stopped`. |
+| Key storage (D5) | API keys are now DPAPI-sealed (`desktop_keys.dat`, `CryptProtectData`/`CryptUnprotectData`, user scope, UI forbidden). Legacy `desktop_keys.json` migrates on first launch and is removed. No passphrase, ciphertext useless off-account. Non-Windows keeps the 0600 plaintext dev file. |
+| First-run resilience | `ErrorBoundary` wraps `App`; render crashes show a readable card with Reload + Copy details, never a raw stack. |
+| Signing (D7) | `build.ps1` finds `signtool`, signs exe + MSI + setup with SHA-256 + RFC3161 timestamp when `SHELLSLATEE_CERT_PFX`/`_PASSWORD` or `SHELLSLATEE_CERT_THUMBPRINT` is set; prints SHA-256 of every installer. |
+
+### Build + test results (Windows 11)
+
+| Step | Command | Result |
+| --- | --- | --- |
+| Engine wheel | `py -3 -m pip wheel .\engine -w src-tauri\resources --no-deps` | `shellslatee_engine-0.3.0-py3-none-any.whl`, 114,397 B |
+| UI build | `npm run build` | `tsc --noEmit` clean; vite 15.2s; `index-C9Roqk1Q.js` 638.76 kB / 198.01 kB gzip |
+| Desktop build | `build-dev.bat build` | exit 0; rust 4m 18s; MSI 2,772,992 B + NSIS 2,141,411 B |
+| Engine tests | `py -3 -m unittest` (excluding `test_asr_setup`) | **18 tests OK**; `test_asr_setup` has 2 failures that are Windows-only executable-bit assumptions, unrelated to this pass |
+| Embedded wheel | `grep` exe for wheel name | present; exe 5,047,808 B |
+
+### Installer hashes (unsigned, 0.3.0)
+
+```
+461aae1c079b74fe24b14585e9fee1c647265c77c19a8f579a592fe5dba2d50d  Shellslatee_0.3.0_x64-setup.exe   (2,141,411 B)
+59b1712c6e5162f462c73d66c767aace7bdb4ecba5ef6daff73c92634fb1c324  Shellslatee_0.3.0_x64_en-US.msi   (2,772,992 B)
+614366a4acc578626f489142450d6b5bfe08880de62c12bb63a503ab1210be8b  shellslatee-studio.exe            (5,047,808 B)
+e0090e7ff5fd7651b94a89b85f26d08c5b1bdcd5248ada19bfc3b87eaa5ae932  shellslatee_engine-0.3.0-py3-none-any.whl (114,397 B)
+```
+
+### Criteria status after this pass
+
+| # | Criterion | Status |
+| --- | --- | --- |
+| 5 | Per-lesson cost/time + hard ceiling | **met in code** — ceiling enforced per run |
+| 7 | Signing or documented unsigned path | **path ready** — build signs automatically when a cert is supplied; still unsigned without one |
+| 9 | First-run never shows a raw exception | **mitigated** — error boundary in place; real GUI click-through still pending |
+
+Still open for the tag: supply an Authenticode cert (or ship explicitly
+unsigned), then the clean-VM 30-minute lecture run and the GUI first-run
+click-through.
+

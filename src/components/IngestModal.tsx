@@ -130,6 +130,7 @@ export function IngestModal({ open, onClose }: { open: boolean; onClose: () => v
         course: course.trim() || undefined,
         jobs,
         force: force || undefined,
+        max_cost: config.maxCostUsd && config.maxCostUsd > 0 ? config.maxCostUsd : undefined,
       });
       setJob(started);
       notify("Run started", `${started.total || "Scanning"} items queued`, "info");

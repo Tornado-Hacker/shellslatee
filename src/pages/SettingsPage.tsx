@@ -51,6 +51,7 @@ export function SettingsPage() {
   const [asrLine, setAsrLine] = useState("");
   const [check, setCheck] = useState<{ ok: boolean; detail: string } | null>(null);
   const [model, setModel] = useState(config?.model ?? "");
+  const [maxCost, setMaxCost] = useState(String(config?.maxCostUsd ?? 0));
   const [restarting, setRestarting] = useState(false);
   const [examTitle, setExamTitle] = useState(config?.examTitle ?? "");
   const [examDate, setExamDate] = useState(config?.examDate ?? "");
@@ -71,6 +72,10 @@ export function SettingsPage() {
   useEffect(() => {
     setModel(config?.model ?? "");
   }, [config?.model]);
+
+  useEffect(() => {
+    setMaxCost(String(config?.maxCostUsd ?? 0));
+  }, [config?.maxCostUsd]);
 
   useEffect(() => {
     if (!backend.ready) return;
@@ -261,6 +266,24 @@ export function SettingsPage() {
                 placeholder={selectedProvider?.default_model ?? "provider default"}
               />
               <p className="text-[10px] text-muted">Leave blank to use the provider's default.</p>
+            </div>
+
+            <div className="space-y-1.5 md:col-span-2">
+              <label className="text-[11px] font-medium uppercase tracking-wider text-muted">Cost ceiling per run (USD)</label>
+              <Input
+                type="number"
+                min={0}
+                step="0.01"
+                value={maxCost}
+                onChange={(event) => setMaxCost(event.target.value)}
+                onBlur={() => {
+                  const value = Math.max(0, Number.parseFloat(maxCost) || 0);
+                  setMaxCost(String(value));
+                  void update({ maxCostUsd: value });
+                }}
+                placeholder="0 = no ceiling"
+              />
+              <p className="text-[10px] text-muted">A run stops before the next lesson would cross this total. 0 disables the ceiling.</p>
             </div>
 
             <div className="space-y-1.5 md:col-span-2">

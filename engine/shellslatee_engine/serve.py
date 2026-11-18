@@ -380,6 +380,7 @@ class JobRunner:
             "course": "--course",
             "jobs": "--jobs",
             "template": "--template",
+            "max_cost": "--max-cost",
         }
         for key, flag in mapping.items():
             value = flags.get(key)
@@ -389,6 +390,8 @@ class JobRunner:
             command.extend(["--limit", str(int(flags["limit"]))])
         if flags.get("force"):
             command.append("--force")
+        if flags.get("allow_over_budget"):
+            command.append("--allow-over-budget")
         if flags.get("estimate_only"):
             command.append("--estimate-only")
 
@@ -437,7 +440,7 @@ class JobRunner:
         with job._lock:
             job.returncode = code
             if job.status != "stopped":
-                job.status = "done" if code in (0, 1) else "failed"
+                job.status = "done" if code in (0, 1, 3) else "failed"
             if job.failed and code == 1:
                 job.status = "done"
         with job._lock:

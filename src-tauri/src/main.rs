@@ -195,7 +195,98 @@ fn provider_default_model(provider: &str) -> &'static str {
     }
 }
 
+// ---- secret storage --------------------------------------------------------
+// API keys are sealed with Windows DPAPI, which binds the ciphertext to the
+// signed-in Windows account: the file is useless if copied elsewhere, and there
+// is no passphrase to prompt for. A legacy plaintext file is migrated on first
+// write. Other platforms keep the 0600 plaintext file used for development.
+fn sealed_keys_path() -> PathBuf {
+    config_home().join("desktop_keys.dat")
+}
+
+#[cfg(windows)]
+fn dpapi_seal(plain: &[u8]) -> Result<Vec<u8>, String> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{
+        CryptProtectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: plain.len() as u32,
+        pbData: plain.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+    let ok = unsafe {
+        CryptProtectData(
+            &input,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+    };
+    if ok == 0 {
+        return Err("could not encrypt the key store (DPAPI)".to_string());
+    }
+    let mut sealed = vec![0u8; output.cbData as usize];
+    unsafe {
+        std::ptr::copy_nonoverlapping(output.pbData, sealed.as_mut_ptr(), output.cbData as usize);
+        LocalFree(output.pbData as *mut core::ffi::c_void);
+    }
+    Ok(sealed)
+}
+
+#[cfg(windows)]
+fn dpapi_open(sealed: &[u8]) -> Result<Vec<u8>, String> {
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Cryptography::{
+        CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
+    let input = CRYPT_INTEGER_BLOB {
+        cbData: sealed.len() as u32,
+        pbData: sealed.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: std::ptr::null_mut(),
+    };
+    let ok = unsafe {
+        CryptUnprotectData(
+            &input,
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            CRYPTPROTECT_UI_FORBIDDEN,
+            &mut output,
+        )
+    };
+    if ok == 0 {
+        return Err("could not decrypt the key store (DPAPI)".to_string());
+    }
+    let mut plain = vec![0u8; output.cbData as usize];
+    unsafe {
+        std::ptr::copy_nonoverlapping(output.pbData, plain.as_mut_ptr(), output.cbData as usize);
+        LocalFree(output.pbData as *mut core::ffi::c_void);
+    }
+    Ok(plain)
+}
+
 fn read_keys() -> HashMap<String, String> {
+    #[cfg(windows)]
+    {
+        if let Ok(sealed) = fs::read(sealed_keys_path()) {
+            if let Ok(plain) = dpapi_open(&sealed) {
+                if let Ok(keys) = serde_json::from_slice::<HashMap<String, String>>(&plain) {
+                    return keys;
+                }
+            }
+        }
+    }
     fs::read_to_string(keys_path())
         .ok()
         .and_then(|raw| serde_json::from_str(&raw).ok())
@@ -216,6 +307,10 @@ fn lock_down(path: &Path) {
 fn lock_down(_path: &Path) {}
 
 fn write_atomic(path: &Path, contents: &str) -> Result<(), String> {
+    write_atomic_bytes(path, contents.as_bytes())
+}
+
+fn write_atomic_bytes(path: &Path, contents: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| format!("could not create {}: {error}", parent.display()))?;
     }
@@ -253,8 +348,33 @@ fn clear_keychain(provider: &str) {
 }
 
 fn write_keys(keys: &HashMap<String, String>) -> Result<(), String> {
-    let raw = serde_json::to_string_pretty(keys).map_err(|error| format!("could not encode keys: {error}"))?;
-    write_atomic(&keys_path(), &raw)
+    let raw = serde_json::to_vec(keys).map_err(|error| format!("could not encode keys: {error}"))?;
+    #[cfg(windows)]
+    {
+        let sealed = dpapi_seal(&raw)?;
+        write_atomic_bytes(&sealed_keys_path(), &sealed)?;
+        // The plaintext copy is superseded once the sealed file is on disk.
+        let _ = fs::remove_file(keys_path());
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let text = String::from_utf8(raw).map_err(|error| format!("could not encode keys: {error}"))?;
+        write_atomic(&keys_path(), &text)
+    }
+}
+
+// Upgrade a pre-0.3.0 plaintext key file to the sealed store on first launch.
+fn migrate_keys() {
+    #[cfg(windows)]
+    {
+        if sealed_keys_path().exists() {
+            return;
+        }
+        let Ok(raw) = fs::read_to_string(keys_path()) else { return };
+        let Ok(keys) = serde_json::from_str::<HashMap<String, String>>(&raw) else { return };
+        let _ = write_keys(&keys);
+    }
 }
 
 // `pip install --user` drops the console script outside PATH for most Windows
@@ -983,6 +1103,7 @@ fn default_vault() -> Result<String, String> {
 
 fn main() {
     install_panic_hook();
+    migrate_keys();
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(600))

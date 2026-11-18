@@ -36,6 +36,7 @@ function defaultConfig(): AppConfig {
     examTitle: "",
     examDate: "",
     dailyMinutes: 25,
+    maxCostUsd: 0,
     lastNote: "",
     lastOpened: Date.now(),
     streakDays: [],

@@ -3244,7 +3244,7 @@ dependencies = [
 
 [[package]]
 name = "shellslatee-studio"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "dirs 5.0.1",
  "reqwest 0.12.28",
@@ -3253,6 +3253,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

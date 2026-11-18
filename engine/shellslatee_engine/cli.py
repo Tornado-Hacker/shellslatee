@@ -114,6 +114,14 @@ def _build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--force", action="store_true")
     run_parser.add_argument("--estimate-only", action="store_true")
     run_parser.add_argument(
+        "--max-cost", type=float, default=None,
+        help="hard USD ceiling for this run; stops before the next lesson would exceed it (0 disables)",
+    )
+    run_parser.add_argument(
+        "--allow-over-budget", action="store_true",
+        help="run even when the preflight estimate exceeds the ceiling",
+    )
+    run_parser.add_argument(
         "--json", action="store_true", dest="json_stream",
         help="emit NDJSON progress events on stdout (human logs stay on stderr)",
     )
@@ -374,6 +382,8 @@ WATCH_DEFAULTS = {
     "max_frames": None,
     "keep_frames": False,
     "estimate_only": False,
+    "max_cost": None,
+    "allow_over_budget": False,
 }
 
 
@@ -821,6 +831,10 @@ def _apply_stored_defaults(args: argparse.Namespace, stored: dict) -> None:
     if args.model is None and isinstance(stored.get("model"), str):
         if stored.get("provider") == args.provider:
             args.model = stored["model"]
+    if getattr(args, "max_cost", None) is None:
+        ceiling = stored.get("max_cost_usd")
+        if isinstance(ceiling, (int, float)) and ceiling > 0:
+            args.max_cost = float(ceiling)
 
 
 @dataclass
@@ -996,6 +1010,20 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"{item.kind:6} {item.rel}")
         return 0
 
+    ceiling = float(getattr(args, "max_cost", None) or 0.0)
+    allow_over = bool(getattr(args, "allow_over_budget", False))
+    if ceiling > 0 and projection["usd"] > ceiling:
+        if allow_over:
+            _emit(
+                f"budget: estimated ${projection['usd']:.2f} is over the ${ceiling:.2f} ceiling — "
+                f"continuing anyway (--allow-over-budget)"
+            )
+        else:
+            _emit(
+                f"budget: estimated ${projection['usd']:.2f} is over the ${ceiling:.2f} ceiling — "
+                f"will stop once the ceiling is reached"
+            )
+
     course_title = args.course or pretty_name(source_root.name)
     state_dir = out_root / ".shellslatee"
     state = State.load(state_dir / "state.json")
@@ -1043,6 +1071,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     spent_usd = 0.0
     written = 0
     workers = max(1, args.jobs)
+    budget_stopped = False
 
     def _on_rate_limit(name: str, status: int, _detail: str) -> None:
         _emit(f"rate limited: {name} HTTP {status} — retrying with backoff")
@@ -1055,39 +1084,43 @@ def cmd_run(args: argparse.Namespace) -> int:
     paused_announced = False
     _emit(f"running {len(jobs)} job(s) with {workers} worker(s)")
 
-    for job in jobs:
-        _event(
-            stream, "job", index=job.order, total=len(found), rel=job.rel_key, status="running"
-        )
+    def _over_budget() -> bool:
+        return ceiling > 0 and not allow_over and spent_usd >= ceiling
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {
-            pool.submit(
-                _process_job,
-                job,
-                provider,
-                model,
-                api_key,
-                settings,
-                course_title,
-                args.template,
-                args.quality_min,
-                out_root,
-                visual_mode,
-                frame_interval,
-                max_frames,
-                args.keep_frames,
-            ): job
-            for job in jobs
-        }
-        pending = set(futures)
-        finished: list = []
-        while pending or finished:
-            if pending:
-                completed, _still_pending = wait(pending, timeout=0.25, return_when=FIRST_COMPLETED)
-                for future in completed:
-                    pending.discard(future)
-                    finished.append(future)
+        queue = list(jobs)
+        in_flight: dict = {}
+        while queue or in_flight:
+            # Submit only while the budget allows, so a ceiling stops the run
+            # instead of merely warning after the lesson was already paid for.
+            while queue and len(in_flight) < workers:
+                if _over_budget():
+                    budget_stopped = True
+                    break
+                job = queue.pop(0)
+                _event(
+                    stream, "job", index=job.order, total=len(found),
+                    rel=job.rel_key, status="running",
+                )
+                future = pool.submit(
+                    _process_job,
+                    job,
+                    provider,
+                    model,
+                    api_key,
+                    settings,
+                    course_title,
+                    args.template,
+                    args.quality_min,
+                    out_root,
+                    visual_mode,
+                    frame_interval,
+                    max_frames,
+                    args.keep_frames,
+                )
+                in_flight[future] = job
+            if not in_flight:
+                break
             if pause.PAUSE.paused:
                 if not paused_announced:
                     paused_announced = True
@@ -1099,8 +1132,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 paused_announced = False
                 _emit("resumed")
                 _event(stream, "resumed")
-            for future in finished:
-                job = futures[future]
+            completed, _ = wait(list(in_flight), timeout=0.25, return_when=FIRST_COMPLETED)
+            for future in completed:
+                job = in_flight.pop(future)
                 try:
                     note, meta = future.result()
                 except FAILURE_TYPES as exc:
@@ -1146,7 +1180,22 @@ def cmd_run(args: argparse.Namespace) -> int:
                     f"-> {job.note_rel.relative_to(out_root)}  "
                     f"({human_duration(meta.duration)}, gen {job.generation})"
                 )
-            finished.clear()
+
+        if queue:
+            for job in queue:
+                skipped += 1
+                _emit(f"skip (budget ceiling reached) {job.rel_key}")
+                _event(
+                    stream, "job", index=job.order, total=len(found),
+                    rel=job.rel_key, status="skip", reason="budget",
+                )
+
+    if budget_stopped:
+        _emit(
+            f"budget ceiling reached: spent ${spent_usd:.4f} of ${ceiling:.2f}; "
+            f"remaining lessons are left for the next run"
+        )
+        _event(stream, "budget_stopped", spent=round(spent_usd, 6), ceiling=ceiling)
 
     settings_payload = {
         "provider": provider.name,
@@ -1155,6 +1204,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "language": args.language,
         "course": course_title,
         "template": args.template,
+        "max_cost_usd": ceiling,
         "updated": utc_now(),
     }
     atomic_write(state_dir / "settings.json", json.dumps(settings_payload, indent=2) + "\n")
@@ -1192,6 +1242,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     if failures:
         _emit("see _failed.md")
         return 1
+    if budget_stopped:
+        return 3
     return 0
 
 

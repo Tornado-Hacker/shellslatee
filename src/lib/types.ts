@@ -244,6 +244,7 @@ export type AppConfig = {
   examTitle: string;
   examDate: string;
   dailyMinutes: number;
+  maxCostUsd: number;
   lastNote: string;
   lastOpened: number;
   streakDays: string[];
