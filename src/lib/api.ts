@@ -6,7 +6,10 @@ import type {
   AskResult,
   Card,
   CardsQueue,
+  AsrApply,
+  AsrStatus,
   CourseAnswer,
+  DoctorReport,
   DrillQueue,
   GraphPayload,
   Job,
@@ -133,6 +136,14 @@ export const api = {
     provider?: string;
     model?: string;
   }) => request<ActionResult>("/api/action", { method: "POST", body: JSON.stringify(payload) }),
+  doctor: () => request<DoctorReport>("/api/doctor"),
+  asrStatus: () => request<AsrStatus>("/api/asr/status"),
+  asrProvision: (model = "tiny.en", force = false) =>
+    request<Job>("/api/asr/provision", {
+      method: "POST",
+      body: JSON.stringify({ model, force }),
+    }),
+  asrApply: () => request<AsrApply>("/api/asr/apply", { method: "POST" }),
   askCourse: (payload: { out: string; question: string; provider?: string; model?: string }) =>
     request<CourseAnswer>("/api/ask_course", { method: "POST", body: JSON.stringify(payload) }),
   cards: (out: string, limit = 20) => request<CardsQueue>(`/api/cards${qs({ out, limit })}`),

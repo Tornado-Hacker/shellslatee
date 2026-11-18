@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Check,
   Cpu,
+  Download,
   Eye,
   FolderOpen,
   KeyRound,
@@ -21,7 +22,7 @@ import { api } from "@/lib/api";
 import { bridge } from "@/lib/bridge";
 import { riseItem, stagger } from "@/lib/motion";
 import { useStore } from "@/lib/store";
-import type { Accent, Provider, Theme } from "@/lib/types";
+import type { Accent, AsrStatus, Provider, Theme } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const accents: { id: Accent; label: string; color: string }[] = [
@@ -45,6 +46,9 @@ export function SettingsPage() {
   const [key, setKey] = useState("");
   const [keyBusy, setKeyBusy] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [asr, setAsr] = useState<AsrStatus | null>(null);
+  const [asrBusy, setAsrBusy] = useState(false);
+  const [asrLine, setAsrLine] = useState("");
   const [check, setCheck] = useState<{ ok: boolean; detail: string } | null>(null);
   const [model, setModel] = useState(config?.model ?? "");
   const [restarting, setRestarting] = useState(false);
@@ -68,9 +72,68 @@ export function SettingsPage() {
     setModel(config?.model ?? "");
   }, [config?.model]);
 
+  useEffect(() => {
+    if (!backend.ready) return;
+    let live = true;
+    api
+      .asrStatus()
+      .then((report) => {
+        if (live) setAsr(report);
+      })
+      .catch(() => {
+        if (live) setAsr(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [backend.ready]);
+
   if (!config) return null;
 
   const selectedProvider = providers.find((provider) => provider.name === config.provider);
+
+  const recheckEngine = async () => {
+    setAsrBusy(true);
+    try {
+      setAsr(await api.asrStatus());
+    } catch (err) {
+      notify("Engine check failed", err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      setAsrBusy(false);
+    }
+  };
+
+  const setupAsr = async () => {
+    setAsrBusy(true);
+    setAsrLine("starting…");
+    try {
+      let job = await api.asrProvision("tiny.en");
+      for (let tick = 0; tick < 900; tick += 1) {
+        job = await api.job(job.id);
+        const tail = job.log?.[job.log.length - 1];
+        if (tail) setAsrLine(tail.replace(/^\[asr\]\s*/, ""));
+        if (job.status !== "running") break;
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+      if (job.status === "failed") {
+        throw new Error(job.log?.[job.log.length - 1] ?? "provisioning failed");
+      }
+      const applied = await api.asrApply();
+      setAsr(await api.asrStatus());
+      notify(
+        applied.ready ? "Transcription ready" : "Transcription partly installed",
+        applied.ready
+          ? "ffmpeg, the whisper wrapper and a model are in place."
+          : "Re-check below to see what is still missing.",
+        applied.ready ? "success" : "info",
+      );
+    } catch (err) {
+      notify("Setup failed", err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      setAsrBusy(false);
+      setAsrLine("");
+    }
+  };
 
   const pickVault = async () => {
     const picked = await bridge.pickFolder("Choose the folder that holds generated notes");
@@ -279,6 +342,79 @@ export function SettingsPage() {
             </Button>
             <Button variant="ghost" size="sm" onClick={() => refresh()} icon={<RefreshCw className="h-3.5 w-3.5" />}>
               Reload vault
+            </Button>
+          </div>
+        </Card>
+      </motion.div>
+
+      <motion.div variants={riseItem}>
+        <Card className="p-4">
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="grid h-8 w-8 place-items-center rounded-lg bg-iris/10 text-iris"><Cpu className="h-4 w-4" /></div>
+              <div>
+                <p className="text-[13px] font-semibold">Transcription engine</p>
+                <p className="text-[11px] text-muted">
+                  Videos need ffmpeg, ffprobe, a whisper binary and a model. Slides and PDFs do not.
+                </p>
+              </div>
+            </div>
+            {asr && (
+              <Badge tone={asr.ready ? "good" : "warn"}>
+                {asr.ready ? "ready" : "needs setup"}
+              </Badge>
+            )}
+          </div>
+          {!asr ? (
+            <p className="text-[12px] text-muted">
+              {backend.ready ? "Checking the local engine…" : "Waiting for the engine to start."}
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {asr.checks.map((row) => (
+                <div key={row.name} className="flex items-start gap-2 text-[12px]">
+                  <Badge tone={row.ok ? "good" : "warn"} className="mt-0.5 shrink-0">
+                    {row.ok ? "ok" : "miss"}
+                  </Badge>
+                  <span className="w-[7.5rem] shrink-0 font-medium">{row.name}</span>
+                  <span className="min-w-0 break-words text-muted">{row.detail}</span>
+                </div>
+              ))}
+              {asr.ready && (
+                <p className="pt-2 text-[11px] text-muted">
+                  Installed in <code className="rounded bg-line/40 px-1 py-0.5">{asr.target}</code>
+                </p>
+              )}
+              {!asr.ready && (
+                <p className="pt-2 text-[11px] text-muted">
+                  Setup downloads a static ffmpeg (~40 MB), a ggml-tiny.en model (~75 MB) and a
+                  faster-whisper wrapper. One time, no terminal needed.
+                </p>
+              )}
+              {asrLine && (
+                <p className="truncate pt-1 font-mono text-[10.5px] text-muted">{asrLine}</p>
+              )}
+            </div>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            {asr && !asr.ready && (
+              <Button
+                size="sm"
+                disabled={asrBusy || !backend.ready}
+                onClick={() => void setupAsr()}
+                icon={<Download className={cn("h-3.5 w-3.5", asrBusy && "animate-pulse")} />}
+              >
+                {asrBusy ? "Setting up…" : "Set up transcription"}
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={asrBusy}
+              onClick={() => void recheckEngine()}
+              icon={<RefreshCw className={cn("h-3.5 w-3.5", asrBusy && "animate-spin")} />}
+            >
+              Re-check
             </Button>
           </div>
         </Card>

@@ -2,6 +2,8 @@
   "name": "shellslatee-desktop",
   "private": true,
   "version": "0.2.4",
+  "license": "MIT",
+  "description": "Local-first study cockpit: lectures to cited notes, cards and quizzes.",
   "type": "module",
   "scripts": {
     "dev": "vite",

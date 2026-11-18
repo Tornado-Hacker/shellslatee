@@ -10,6 +10,34 @@ export type Lesson = {
   video_rel: string | null;
 };
 
+export type DoctorCheck = {
+  name: string;
+  ok: boolean;
+  detail: string;
+};
+
+export type DoctorReport = {
+  checks: DoctorCheck[];
+  ready: boolean;
+};
+
+export type AsrStatus = {
+  target: string;
+  bin: string;
+  present: { ffmpeg: boolean; ffprobe: boolean; whisper: boolean; models: string[] };
+  missing: string[];
+  has_env: boolean;
+  checks: DoctorCheck[];
+  ready: boolean;
+  models_available: string[];
+};
+
+export type AsrApply = {
+  env: Record<string, string>;
+  checks: DoctorCheck[];
+  ready: boolean;
+};
+
 export type Concept = {
   slug: string;
   name: string;

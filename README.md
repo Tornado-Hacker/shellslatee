@@ -105,12 +105,47 @@ Download the engine wheel from [Releases](https://github.com/Tornado-Hacker/shel
 and install it yourself:
 
 ```powershell
-python -m pip install --user --upgrade .\shellslatee_engine-0.2.0-py3-none-any.whl
+python -m pip install --user --upgrade .\shellslatee_engine-0.2.1-py3-none-any.whl
 ```
 
 The engine is not on PyPI yet — install the wheel from the release.
 
 </details>
+
+### Step 2b — Audio transcription (required for video)
+
+Notes come from a transcript, and transcription runs **locally**. Two ways to
+get the stack in place:
+
+**In the app** — Settings → *Transcription engine* → **Set up transcription**.
+It downloads a static ffmpeg + ffprobe (~40 MB), a ggml model (~75 MB) and a
+faster-whisper wrapper into your per-user app data, then applies it to the
+engine. No terminal, no PATH editing.
+
+**From the terminal** — same thing, scriptable:
+
+```powershell
+shellslatee provision                  # tiny.en, per-user app data
+shellslatee provision --model base.en  # better accuracy, ~140 MB
+shellslatee doctor                     # every required line says "ok"
+```
+
+| Piece | Why |
+| --- | --- |
+| `ffmpeg` + `ffprobe` | extracts 16 kHz mono audio |
+| a whisper binary | speech → timestamped text (real `whisper-cli` if already on PATH, otherwise a faster-whisper wrapper) |
+| a `ggml` model file | the acoustic model |
+
+Prefer your own build? Put `whisper-cli` on PATH, set
+`SHELLSLATEE_WHISPER_MODEL` to any ggml file, and `shellslatee doctor` will use
+it — provisioning sees the native binary and leaves it alone. Files live in
+`%LOCALAPPDATA%\Shellslatee\asr` on Windows (`~/.local/share/shellslatee/asr`
+on Linux, `~/Library/Application Support/Shellslatee/asr` on macOS); override
+with `SHELLSLATEE_ASR_DIR`. Provisioned settings persist in `asr.env` and are
+loaded at engine startup.
+
+**Settings → Transcription engine** shows the same checks live (and a
+`Re-check` button), so you can see which piece is missing without a terminal.
 
 ### Step 3 — Launch
 
@@ -140,8 +175,10 @@ status. First launch walks you through:
 | 7 | **Study → Explain back** → write the lesson yourself | Verdict, gaps, one probing question |
 
 **Back up your keys before you reinstall Windows.** Settings → *Export keys*
-writes an encrypted file you can restore on the new machine. The config folder
-itself is listed [below](#where-your-data-lives).
+copies your key file; it is **plaintext JSON** today
+(`%USERPROFILE%\.config\shellslatee\desktop_keys.json`) — treat it like a
+password, do not sync it, and delete the copy once it is restored. Encryption at
+rest is tracked as defect D5 in [`tracking.md`](tracking.md).
 
 ---
 
@@ -204,10 +241,12 @@ The engine lives in its own repository. To produce the wheel the installer
 expects:
 
 ```powershell
-git clone <engine-repo> shellslatee-engine
-python -m pip wheel .\shellslatee-engine --no-deps -w dist-engine
-python -m pip install --user --upgrade .\dist-engine\shellslatee_engine-0.2.0-py3-none-any.whl
+python -m pip wheel .\engine --no-deps -w dist-engine
+python -m pip install --user --upgrade .\dist-engine\shellslatee_engine-0.2.1-py3-none-any.whl
 ```
+
+The engine tree is vendored in `engine/`; tests run with
+`python -m unittest discover -s engine/tests -t engine`.
 
 ---
 
@@ -329,6 +368,8 @@ shellslatee/
 │   │                          onboarding, connection screen, markdown
 │   ├── lib/                   Tauri bridge, API client, zustand store, types
 │   └── pages/                 Home, Library, Note, Study, Ask, Graph, Settings
+├── engine/                    vendored Python engine (0.2.1) + tests
+├── scripts/dev/               ASR provisioning + dev shim (not shipped)
 └── src-tauri/
     ├── Cargo.toml             crate `shellslatee-studio`
     ├── tauri.conf.json        window, bundle, identifier
@@ -340,12 +381,16 @@ shellslatee/
 
 ## Roadmap
 
-| Version | Focus |
-| --- | --- |
-| 0.2.4 | Current — setup wizard picks the notes folder; engine lifecycle, key storage, study loop |
-| 0.3.0 | Signed installers, multi-hour sessions with real models |
-| 0.4.0 | Scanned-PDF OCR, richer slide-note extraction |
-| 1.0.0 | Plugin marketplace, publishable adapter API |
+| Version | Name | Focus |
+| --- | --- | --- |
+| 0.2.4 | **Session** | Current — setup wizard picks the notes folder; engine lifecycle, key storage, study loop |
+| 0.3.0 | **Voice** | ASR provisioning on first run, engine vendored in-tree, natural-language ask + timestamp citations, licence and signing, first 10-lecture batch |
+| 0.4.0 | **Recall** | Scanned-PDF OCR, concept pruning, richer slide-note extraction, explain-back rubric |
+| 0.5.0 | **Reliability** | Multi-hour batches with resume/retry, cost ceiling, budget ledger |
+| 0.9.0 | **Release Candidate** | Signed MSI + NSIS, upgrade path, installer QA matrix, SBOM |
+| 1.0.0 | **Cockpit** | Plugin marketplace with sandboxed ABI, publishable adapter API, accessibility pass |
+
+Measured status, defect list and exit criteria live in [`tracking.md`](tracking.md).
 
 ---
 
@@ -357,4 +402,12 @@ shellslatee/
 - Installers are unsigned until certificates are configured.
 - The graph view computes a force layout in the renderer; very large vaults
   (500+ lessons) take a moment to settle.
-- Licence: TBD — add a `LICENSE` file before distributing publicly.
+- Licence: **MIT** — see `LICENSE`.
+- The engine now lives in `engine/` (0.2.1) and the installer bundles a wheel
+  built from it. It was recovered from the shipped wheel because the upstream
+  engine repository is not public; provenance and the fix list are in
+  [`tracking.md`](tracking.md).
+- Course-wide answers accept natural-language questions and return the section
+  heading plus the second in the video when the heading carries a timestamp.
+- Engine-side features that exist but are not yet in the UI: drills, publish,
+  plugins, MCP server, watch mode, TUI.

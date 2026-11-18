@@ -7,3 +7,11 @@ src-tauri/gen/
 .env
 .env.*
 dist-engine/
+
+# python / engine build output
+__pycache__/
+*.py[cod]
+*.egg-info/
+engine/build/
+engine/dist/
+.pytest_cache/
