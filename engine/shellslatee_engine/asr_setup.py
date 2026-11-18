@@ -200,12 +200,12 @@ def _install_ffmpeg(target: Path, size: str, force: bool, log: Log) -> None:
     log("ffmpeg + ffprobe installed")
 
 
-def _install_whisper(target: Path, log: Log, force: bool = False) -> str:
+def _install_whisper(target: Path, log: Log, force: bool = False) -> tuple[str, Path]:
     if not force:
         existing = os.environ.get("SHELLSLATEE_WHISPER_BIN") or shutil.which("whisper-cli")
         if existing and Path(existing).is_file():
             log(f"native whisper binary kept: {existing}")
-            return "native"
+            return "native", Path(existing)
 
     wrapper = whisper_wrapper(target)
     shim_dir = target / "shim"
@@ -252,13 +252,13 @@ def _install_whisper(target: Path, log: Log, force: bool = False) -> str:
         )
         wrapper.chmod(0o755)
     log(f"whisper wrapper written: {wrapper}")
-    return "shim"
+    return "shim", wrapper
 
 
-def write_env(target: Path) -> Path:
+def write_env(target: Path, whisper_bin: Path | None = None) -> Path:
     path = target / "asr.env"
     rows = {
-        "SHELLSLATEE_WHISPER_BIN": str(whisper_wrapper(target)),
+        "SHELLSLATEE_WHISPER_BIN": str(whisper_bin or whisper_wrapper(target)),
         "SHELLSLATEE_WHISPER_MODEL": str(next(iter(sorted((target / "models").glob("ggml-*.bin"))), "")),
         "SHELLSLATEE_FFMPEG_DIR": str(bin_dir(target)),
     }
@@ -315,8 +315,8 @@ def install(
     log(f"target {root} on {platform.system()} {platform.machine()}")
     _install_ffmpeg(root, size, force, log)
     model = download(MODEL_URL.format(size=size), model_path(root, size), log)
-    backend = _install_whisper(root, log, force=force)
-    env_file = write_env(root)
+    backend, whisper_bin = _install_whisper(root, log, force=force)
+    env_file = write_env(root, whisper_bin)
     apply_env(root)
     log(f"wrote {env_file}")
     from . import doctor

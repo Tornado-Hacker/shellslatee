@@ -543,3 +543,46 @@ Still open for the tag: supply an Authenticode cert (or ship explicitly
 unsigned), then the clean-VM 30-minute lecture run and the GUI first-run
 click-through.
 
+---
+
+## 17. On-host validation pass — 2026-11-18
+
+Ran the exit-criteria checks this machine can actually clear, against the
+0.3.0 wheel and the rebuilt 0.3.0 installers.
+
+### Defect found and fixed
+
+`asr_setup._install_whisper` reported `backend=native` when it reused an
+existing `whisper-cli`, but `write_env` still wrote
+`SHELLSLATEE_WHISPER_BIN=<target>\bin\whisper-cli.cmd` — a wrapper that was
+never created on that path. Every run then died with
+`[WinError 2] The system cannot find the file specified`. Fixed by returning
+the chosen binary path from `_install_whisper` and writing it into `asr.env`.
+Platform-assuming ASR tests were also made Windows-aware; `unittest` is now
+**25/25 OK on Windows**.
+
+### Results
+
+| Check | Command / path | Result |
+| --- | --- | --- |
+| Clean install | fresh venv + `shellslatee 0.3.0` wheel | `--version` = 0.3.0 |
+| Provision from empty dir | `provision --dir asr04` | ffmpeg 109 MB + ggml-tiny.en 74 MB downloaded; `asr.env` points at an existing `whisper-cli.cmd` |
+| Doctor on the fresh dir | `shellslatee doctor` | ok: ffmpeg, ffprobe, whisper.cpp, model, aikey key file (OCR still absent by design) |
+| 30-minute lecture via app API | `POST /api/run` on a 1800 s lesson, `transcriber=whisper` | 1 note, 7 concepts, 0 failed; whisper.cpp backend |
+| Cards | `POST /api/cards/build` | 24 created, 20 listed |
+| Quiz | `POST /api/quiz/build` + `/api/quiz/check` | 18 items (7 MCQ, 11 short), grading works |
+| Ask | `POST /api/ask` | cited answer returned, 1551 in / 668 out tokens |
+| Kill-resume | kill mid-batch, rerun | 2 skipped (cached), 8 written, 0 failed, 10/10 done |
+| GUI | launch 0.3.0 exe | process starts and exits cleanly; this harness has no interactive desktop to click the first-run flow |
+
+### Still environmental
+
+- No fresh Windows VM on this host (Windows 10 Home, not elevated, no
+  hypervisor manager), so criterion 1's "fresh VM" wording is not satisfied.
+- The only corpus on disk is 10 clips totalling 20m 26s; the ≥3 h batch
+  (criterion 4) was not run.
+- First-run *visual* click-through (criterion 9) is unverified; the error
+  boundary is in place and the 30-minute path runs over the same API the GUI
+  uses.
+
+

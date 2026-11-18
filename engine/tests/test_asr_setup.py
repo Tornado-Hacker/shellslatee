@@ -21,8 +21,9 @@ class InspectTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "bin").mkdir()
-            for name in ("ffmpeg", "ffprobe", "whisper-cli"):
-                (root / "bin" / name).write_text("x")
+            for name in ("ffmpeg", "ffprobe"):
+                (root / "bin" / (name + asr_setup.EXE)).write_text("x")
+            asr_setup.whisper_wrapper(root).write_text("x")
             (root / "models").mkdir()
             (root / "models" / "ggml-tiny.en.bin").write_bytes(b"m")
             report = asr_setup.inspect(root)
@@ -69,7 +70,7 @@ class ExtractTest(unittest.TestCase):
             dest = Path(tmp) / "out"
             found = asr_setup._extract_binaries(archive, {"ffmpeg", "ffprobe"}, dest)
             self.assertEqual(set(found), {"ffmpeg", "ffprobe"})
-            self.assertEqual((dest / "ffmpeg").read_bytes(), b"bin-ffmpeg")
+            self.assertEqual((dest / ("ffmpeg" + asr_setup.EXE)).read_bytes(), b"bin-ffmpeg")
             if os.name != "nt":
                 self.assertTrue(os.access(dest / "ffmpeg", os.X_OK))
 
