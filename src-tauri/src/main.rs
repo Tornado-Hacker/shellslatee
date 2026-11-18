@@ -295,10 +295,14 @@ fn engine_from_user_scripts() -> Option<PathBuf> {
 
 
 // ---- one-click setup -------------------------------------------------------
-// The app ships the engine wheel as a bundled resource, so a fresh install only
-// needs Python on the machine. When Python is missing the setup screen can
-// download the official installer and run it per-user, silently.
-const ENGINE_WHEEL: &str = "shellslatee_engine-0.2.0-py3-none-any.whl";
+// The engine wheel is embedded in the binary by build.rs, so both the installed
+// app and the bare portable .exe can install the engine with only Python on the
+// machine. The name and path come from whatever wheel build.rs found, so the
+// binary can never look for a differently-named file than the one it carries.
+const ENGINE_WHEEL_NAME: &str = env!("SHELLSLATEE_WHEEL_NAME");
+static ENGINE_WHEEL_BYTES: &[u8] = include_bytes!(env!("SHELLSLATEE_WHEEL_PATH"));
+const ENGINE_WHEEL_PREFIX: &str = "shellslatee_engine-";
+const ENGINE_WHEEL_SUFFIX: &str = "-py3-none-any.whl";
 const PYTHON_URL: &str = "https://www.python.org/ftp/python/3.12.6/python-3.12.6-amd64.exe";
 
 fn python_candidates() -> Vec<Vec<String>> {
@@ -354,24 +358,65 @@ fn engine_on_path() -> bool {
         .unwrap_or(false)
 }
 
-fn wheel_candidates(app: &tauri::AppHandle) -> Vec<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
+fn wheels_in(dir: &Path) -> Vec<PathBuf> {
+    let mut wheels: Vec<PathBuf> = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else { return wheels };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.starts_with(ENGINE_WHEEL_PREFIX) && name.ends_with(ENGINE_WHEEL_SUFFIX) {
+            wheels.push(path);
+        }
+    }
+    // Newest staged wheel first when a dev tree keeps more than one.
+    wheels.sort();
+    wheels.reverse();
+    wheels
+}
+
+/// Directories that may hold an engine wheel, most specific first: the installed
+/// resource folder, then the folder beside the executable, then the dev tree.
+fn wheel_dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
     if let Ok(dir) = app.path().resource_dir() {
-        candidates.push(dir.join("resources").join(ENGINE_WHEEL));
-        candidates.push(dir.join(ENGINE_WHEEL));
+        dirs.push(dir.join("resources"));
+        dirs.push(dir);
     }
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join("resources").join(ENGINE_WHEEL));
-            candidates.push(dir.join(ENGINE_WHEEL));
+        if let Some(parent) = exe.parent() {
+            dirs.push(parent.join("resources"));
+            dirs.push(parent.to_path_buf());
         }
     }
     if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join("src-tauri").join("resources").join(ENGINE_WHEEL));
-        candidates.push(cwd.join("resources").join(ENGINE_WHEEL));
-        candidates.push(cwd.join("dist-engine").join(ENGINE_WHEEL));
+        dirs.push(cwd.join("src-tauri").join("resources"));
+        dirs.push(cwd.join("resources"));
+        dirs.push(cwd.join("dist-engine"));
     }
-    candidates
+    dirs
+}
+
+fn wheel_candidates(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    wheel_dirs(app).iter().flat_map(|dir| wheels_in(dir)).collect()
+}
+
+/// Spool the embedded wheel to disk when no on-disk copy is next to the app.
+/// This is what makes the standalone portable `.exe` self-sufficient.
+fn stage_embedded_wheel() -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join("shellslatee-setup");
+    fs::create_dir_all(&dir).map_err(|error| format!("could not create {}: {error}", dir.display()))?;
+    let path = dir.join(ENGINE_WHEEL_NAME);
+    let current = fs::read(&path).ok();
+    if current.as_deref() != Some(ENGINE_WHEEL_BYTES) {
+        fs::write(&path, ENGINE_WHEEL_BYTES)
+            .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+    }
+    Ok(path)
 }
 
 fn download_file(url: &str, destination: &Path) -> Result<(), String> {
@@ -404,15 +449,20 @@ fn download_file(url: &str, destination: &Path) -> Result<(), String> {
 #[tauri::command]
 fn check_prereqs(app: tauri::AppHandle) -> Value {
     let python = probe_python();
-    let wheel = wheel_candidates(&app).into_iter().find(|path| path.is_file());
     let engine = engine_from_user_scripts().is_some() || engine_on_path();
     let ready = python.is_some() && engine;
+    // The wheel is embedded in the binary, so every build can install the
+    // engine; report an on-disk copy when one is also staged.
+    let wheel_path = wheel_candidates(&app)
+        .into_iter()
+        .next()
+        .map(|path| path.display().to_string());
     json!({
         "python": python.as_ref().map(|(_, version)| version.clone()),
         "python_hint": python.as_ref().map(|(command, _)| command.join(" ")),
         "engine": engine,
-        "wheel": wheel.is_some(),
-        "wheel_path": wheel.as_ref().map(|path| path.display().to_string()),
+        "wheel": true,
+        "wheel_path": wheel_path,
         "ready": ready,
     })
 }
@@ -449,10 +499,10 @@ fn install_prereqs(app: tauri::AppHandle) -> Result<Value, String> {
         }
     };
 
-    let wheel = wheel_candidates(&app)
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| "this build is missing the engine wheel — reinstall Shellslatee".to_string())?;
+    let wheel = match wheel_candidates(&app).into_iter().next() {
+        Some(path) => path,
+        None => stage_embedded_wheel()?,
+    };
 
     let mut command = Command::new(&python[0]);
     for arg in &python[1..] {

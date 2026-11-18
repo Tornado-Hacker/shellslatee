@@ -28,9 +28,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "resources/shellslatee_engine-0.2.0-py3-none-any.whl"
-    ],
     "windows": {
       "nsis": {
         "installerHooks": "installer.nsh",
